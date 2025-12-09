@@ -9,36 +9,62 @@ import requests
 from streamlit_js_eval import get_geolocation
 from geopy.geocoders import Nominatim
 
-# --- CONFIGURATION ---
+# --- 1. CONFIGURATION & PAGE SETUP (MUST BE FIRST) ---
+# This sets the Browser Tab Title and the Small Icon (Favicon)
+if os.path.exists("logo.png"):
+    st.set_page_config(page_title="National Air Condition", layout="wide", page_icon="logo.png")
+else:
+    st.set_page_config(page_title="National Air Condition", layout="wide", page_icon="❄️")
+
 ADMIN_MOBILE = "9978815870" 
 
-# --- 1. CSS STYLING ---
+# --- 2. CSS STYLING (THE CLEAN LOOK) ---
 def apply_styling():
     st.markdown("""
         <style>
-        .stApp { background-color: #4ba3a8; }
+        /* --- HIDE STREAMLIT UI ELEMENTS --- */
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
+        header {visibility: hidden;}
+        [data-testid="stToolbar"] {visibility: hidden;} 
+        .stDeployButton {display:none;}
+        
+        /* Main Background - Teal */
+        .stApp { background-color: #4ba3a8; margin-top: -50px; }
+        
+        /* Text Colors */
         h1, h2, h3, h4, h5, h6, p, span, div, label, li { color: white !important; }
+        
+        /* Input Boxes */
         .stTextInput input, .stNumberInput input, .stDateInput input, .stTimeInput input, .stPasswordInput input {
             background-color: #ffffff !important; color: #000000 !important; border-radius: 5px; border: 1px solid #ddd;
         }
         div[data-baseweb="input"] { background-color: #ffffff !important; }
         div[data-baseweb="select"] > div { background-color: #ffffff !important; color: black !important; }
+        
+        /* Login Card */
         .login-card {
             background-color: white; padding: 30px; border-radius: 10px; text-align: center;
             box-shadow: 0 4px 15px rgba(0,0,0,0.2); margin: auto; border-top: 5px solid #2c3e50;
         }
         .login-card h2, .login-card p { color: #2c3e50 !important; }
+        
+        /* Tech Card */
         .tech-card {
             background-color: white; padding: 20px; border-radius: 15px;
             box-shadow: 0 4px 15px rgba(0,0,0,0.2); text-align: center; border-top: 8px solid #2c3e50; margin-bottom: 20px;
         }
         .tech-card h3, .tech-card p { color: #2c3e50 !important; }
+        
+        /* Sidebar & Buttons */
         section[data-testid="stSidebar"] { background-color: #388e93; }
         .stButton>button {
             width: 100%; height: 3.5em; border-radius: 8px; font-weight: bold;
             background-color: white !important; color: #4ba3a8 !important; border: none;
         }
         .delete-btn > button { background-color: #e74c3c !important; color: white !important; }
+        
+        /* Footer */
         .footer {
             text-align: center; margin-top: 50px; padding: 20px; 
             color: white; border-top: 1px solid rgba(255,255,255,0.2); font-size: 14px;
@@ -46,7 +72,7 @@ def apply_styling():
         </style>
     """, unsafe_allow_html=True)
 
-# --- 2. DATABASE CONNECTION ---
+# --- 3. DATABASE CONNECTION ---
 def get_connection():
     if "connections" in st.secrets and "tidb" in st.secrets["connections"]:
         creds = st.secrets["connections"]["tidb"]
@@ -66,7 +92,7 @@ def init_db():
         conn.commit(); conn.close()
     except Exception as e: st.error(f"DB Init Error: {e}")
 
-# --- 3. SMS FUNCTION ---
+# --- 4. FUNCTIONS ---
 def send_otp_sms(mobile, otp, reason):
     try:
         api_key = st.secrets["SMS_API_KEY"]
@@ -91,7 +117,6 @@ def update_employee_pin(emp_id, new_pin):
     conn = get_connection(); c = conn.cursor()
     c.execute("UPDATE employees SET pin=%s WHERE id=%s", (new_pin, emp_id)); conn.commit(); conn.close()
 
-# --- 4. CORE LOGIC ---
 def get_address_from_coords(lat, lon):
     try:
         geolocator = Nominatim(user_agent="national_air_app")
@@ -143,10 +168,8 @@ def calculate_salary_logic(emp_id, pay_month, pay_year, base_salary):
         pay_days += pay; report.append([d_str, curr.strftime("%A"), status, pay, note]); curr += timedelta(days=1)
     return pay_days * (base_salary/30), pay_days, report
 
-# --- UI START ---
-if os.path.exists("logo.png"): st.set_page_config(page_title="National Air Condition", layout="wide", page_icon="logo.png")
-else: st.set_page_config(page_title="National Air Condition", layout="wide")
-apply_styling(); 
+# --- UI LOGIC ---
+apply_styling()
 if "connections" in st.secrets: init_db()
 
 if os.path.exists("logo.png"): st.sidebar.image("logo.png", width=200)
@@ -178,8 +201,7 @@ if role == "Technician / Staff":
                     st.write("### 🔒 Security Check")
                     pin = st.text_input("Enter PIN", type="password", max_chars=4, key="tech_pin")
                     if st.button("PUNCH IN"):
-                        real_pin = get_employee_details(emp_id)[1] if 'get_employee_details' in globals() else "1234" # Fallback safe
-                        # Re-fetching just pin for safety
+                        # Get PIN safely
                         conn = get_connection(); c = conn.cursor(); c.execute("SELECT pin FROM employees WHERE id=%s", (emp_id,)); real_pin = c.fetchone()[0]; conn.close()
                         
                         if pin == real_pin and photo and lat:
@@ -190,14 +212,13 @@ if role == "Technician / Staff":
                         elif not lat: st.error("📍 Location Required")
 
                 with tab_reset:
-                    st.info(f"OTP will be sent to Admin Mobile: {ADMIN_MOBILE}")
+                    st.info(f"OTP sent to Admin: {ADMIN_MOBILE}")
                     if st.button("Request PIN Reset OTP"):
                         otp = random.randint(1000, 9999)
                         st.session_state.reset_otp = otp
                         st.session_state.reset_emp_id = emp_id
-                        if send_otp_sms(ADMIN_MOBILE, otp, "PIN Reset"):
-                            st.success("✅ OTP Sent Successfully!")
-                        else: st.error("❌ SMS Failed. Check API Key.")
+                        if send_otp_sms(ADMIN_MOBILE, otp, "PIN Reset"): st.success("✅ OTP Sent!")
+                        else: st.error("❌ SMS Failed")
                     
                     if 'reset_otp' in st.session_state:
                         entered_otp = st.text_input("Enter OTP from Admin", max_chars=4)
@@ -205,7 +226,7 @@ if role == "Technician / Staff":
                         if st.button("Set New PIN"):
                             if str(entered_otp) == str(st.session_state.reset_otp):
                                 update_employee_pin(st.session_state.reset_emp_id, new_pin_set)
-                                st.success("PIN Updated Successfully!")
+                                st.success("PIN Updated!")
                                 del st.session_state.reset_otp
                             else: st.error("Invalid OTP")
             else: st.info("No Staff Found")
@@ -244,24 +265,19 @@ elif role == "Admin / Manager":
         with t1:
             try:
                 conn = get_connection()
-                # Added punch_photo to the query
                 df = pd.read_sql(f"SELECT e.name, a.time_in, a.status, a.address, a.latitude, a.longitude, a.punch_photo FROM attendance a JOIN employees e ON a.emp_id=e.id WHERE a.date='{date.today()}'", conn); conn.close()
                 if not df.empty:
                     for i, r in df.iterrows():
-                        # Create a nice layout for each attendance entry
                         with st.container():
                             c1, c2 = st.columns([3, 1])
                             with c1:
                                 st.markdown(f"### {r['name']}")
                                 st.markdown(f"**🕒 Time:** {r['time_in']}")
                                 st.markdown(f"**📍 Location:** [{r['address']}](https://www.google.com/maps/search/?api=1&query={r['latitude']},{r['longitude']})")
-                                if r['status'] == "Half Day":
-                                    st.warning("⚠️ LATE ENTRY (Half Day)")
-                                else:
-                                    st.success("✅ PRESENT")
+                                if r['status'] == "Half Day": st.warning("⚠️ LATE ENTRY (Half Day)")
+                                else: st.success("✅ PRESENT")
                             with c2:
-                                if r['punch_photo']:
-                                    st.image(r['punch_photo'], width=120, caption="Live Selfie")
+                                if r['punch_photo']: st.image(r['punch_photo'], width=120, caption="Live Selfie")
                             st.markdown("---")
                 else: st.info("No Data Today")
             except Exception as e: st.error(f"Error: {e}")
