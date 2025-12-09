@@ -5,12 +5,12 @@ import mysql.connector
 from io import BytesIO
 import os
 import random
-import requests  # Required for SMS
+import requests
 from streamlit_js_eval import get_geolocation
 from geopy.geocoders import Nominatim
 
 # --- CONFIGURATION ---
-ADMIN_MOBILE = "9978815870"  # Admin Number for Password Resets
+ADMIN_MOBILE = "9978815870" 
 
 # --- 1. CSS STYLING ---
 def apply_styling():
@@ -54,7 +54,7 @@ def get_connection():
             host=creds["DB_HOST"], user=creds["DB_USER"], password=creds["DB_PASSWORD"],
             port=creds["DB_PORT"], database=creds["DB_NAME"], ssl_disabled=False
         )
-    else: st.error("⚠ Secrets Missing!"); st.stop()
+    else: st.error("⚠️ Secrets Missing!"); st.stop()
 
 def init_db():
     try:
@@ -66,43 +66,17 @@ def init_db():
         conn.commit(); conn.close()
     except Exception as e: st.error(f"DB Init Error: {e}")
 
-# --- 3. REAL SMS FUNCTION (Fast2SMS) ---
+# --- 3. SMS FUNCTION ---
 def send_otp_sms(mobile, otp, reason):
-    """
-    Sends Real SMS using Fast2SMS API.
-    """
     try:
         api_key = st.secrets["SMS_API_KEY"]
         url = "https://www.fast2sms.com/dev/bulkV2"
-        
-        # Fast2SMS Quick SMS Route
-        message = f"National Air Condition Verification.\nYour OTP for {reason} is {otp}.\nDo not share this code."
-        
-        payload = {
-            "route": "q",
-            "message": message,
-            "language": "english",
-            "flash": 0,
-            "numbers": mobile,
-        }
-        
-        headers = {
-            'authorization': api_key,
-            'Content-Type': "application/x-www-form-urlencoded",
-            'Cache-Control': "no-cache",
-        }
-
+        message = f"National Air Condition Verification.\nYour OTP for {reason} is {otp}."
+        payload = {"route": "q", "message": message, "language": "english", "flash": 0, "numbers": mobile}
+        headers = {'authorization': api_key, 'Content-Type': "application/x-www-form-urlencoded"}
         response = requests.request("POST", url, data=payload, headers=headers)
-        
-        if response.status_code == 200:
-            return True
-        else:
-            print(f"SMS Failed: {response.text}") # Debugging
-            return False
-            
-    except Exception as e:
-        print(f"SMS Error: {e}")
-        return False
+        return response.status_code == 200
+    except: return False
 
 def get_admin_password():
     conn = get_connection(); c = conn.cursor()
@@ -144,7 +118,7 @@ def mark_attendance(emp_id, work_date, time_in_obj, punch_photo_bytes, lat, lon,
     cutoff = time(10, 30); status = "Half Day" if time_in_obj > cutoff else "Present"
     try:
         c.execute("SELECT * FROM attendance WHERE emp_id=%s AND date=%s", (emp_id, work_date))
-        if c.fetchone(): st.error("⚠ Attendance already marked.")
+        if c.fetchone(): st.error("⚠️ Attendance already marked.")
         else:
             c.execute("""INSERT INTO attendance (emp_id, date, time_in, status, punch_photo, latitude, longitude, address) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""", (emp_id, work_date, time_in_obj.strftime("%H:%M"), status, punch_photo_bytes, lat, lon, addr))
             conn.commit(); st.balloons(); st.success(f"✅ MARKED {status.upper()} @ {addr}")
@@ -204,7 +178,10 @@ if role == "Technician / Staff":
                     st.write("### 🔒 Security Check")
                     pin = st.text_input("Enter PIN", type="password", max_chars=4, key="tech_pin")
                     if st.button("PUNCH IN"):
-                        real_pin = get_employee_details(emp_id)[1]
+                        real_pin = get_employee_details(emp_id)[1] if 'get_employee_details' in globals() else "1234" # Fallback safe
+                        # Re-fetching just pin for safety
+                        conn = get_connection(); c = conn.cursor(); c.execute("SELECT pin FROM employees WHERE id=%s", (emp_id,)); real_pin = c.fetchone()[0]; conn.close()
+                        
                         if pin == real_pin and photo and lat:
                             addr = get_address_from_coords(lat, lon)
                             mark_attendance(emp_id, date.today(), datetime.now().time(), photo.getvalue(), str(lat), str(lon), addr)
@@ -218,11 +195,9 @@ if role == "Technician / Staff":
                         otp = random.randint(1000, 9999)
                         st.session_state.reset_otp = otp
                         st.session_state.reset_emp_id = emp_id
-                        # SENDING REAL SMS
                         if send_otp_sms(ADMIN_MOBILE, otp, "PIN Reset"):
-                            st.success("✅ OTP Sent Successfully via SMS!")
-                        else:
-                            st.error("❌ SMS Failed. Check API Key.")
+                            st.success("✅ OTP Sent Successfully!")
+                        else: st.error("❌ SMS Failed. Check API Key.")
                     
                     if 'reset_otp' in st.session_state:
                         entered_otp = st.text_input("Enter OTP from Admin", max_chars=4)
@@ -245,45 +220,52 @@ elif role == "Admin / Manager":
         with col2:
             st.markdown("<br><div class='login-card'><h2>Admin Login</h2></div>", unsafe_allow_html=True)
             l_tab1, l_tab2 = st.tabs(["Login", "Forgot Password?"])
-            
             with l_tab1:
                 pwd = st.text_input("Password", type="password")
                 if st.button("Login"):
                     if pwd == get_admin_password(): st.session_state.admin_auth = True; st.rerun()
                     else: st.error("❌ Wrong Password")
-            
             with l_tab2:
                 if st.button("Send Reset OTP"):
-                    otp = random.randint(1000, 9999)
-                    st.session_state.admin_otp = otp
-                    # SENDING REAL SMS
-                    if send_otp_sms(ADMIN_MOBILE, otp, "Admin Password Reset"):
-                        st.success(f"✅ OTP Sent to {ADMIN_MOBILE}")
-                    else:
-                        st.error("❌ SMS Failed. Check API Key.")
-                
+                    otp = random.randint(1000, 9999); st.session_state.admin_otp = otp
+                    if send_otp_sms(ADMIN_MOBILE, otp, "Admin Password Reset"): st.success(f"✅ OTP Sent to {ADMIN_MOBILE}")
+                    else: st.error("❌ SMS Failed")
                 if 'admin_otp' in st.session_state:
-                    a_otp = st.text_input("Enter OTP")
-                    new_a_pass = st.text_input("New Admin Password", type="password")
+                    a_otp = st.text_input("Enter OTP"); new_a_pass = st.text_input("New Admin Password", type="password")
                     if st.button("Update Password"):
                         if str(a_otp) == str(st.session_state.admin_otp):
-                            update_admin_password(new_a_pass)
-                            st.success("Password Updated! Please Login.")
-                            del st.session_state.admin_otp
+                            update_admin_password(new_a_pass); st.success("Password Updated!"); del st.session_state.admin_otp
                         else: st.error("Invalid OTP")
     else:
         st.title("Admin Dashboard"); 
         if st.button("Logout"): st.session_state.admin_auth = False; st.rerun()
         
-        t1, t2, t3, t4 = st.tabs(["📊 Live", "💰 Payroll", "➕ Add", "❌ Delete"])
+        t1, t2, t3, t4 = st.tabs(["📊 Live Status", "💰 Payroll", "➕ Add", "❌ Delete"])
         with t1:
             try:
-                conn = get_connection(); df = pd.read_sql(f"SELECT e.name, a.time_in, a.status, a.address, a.latitude, a.longitude FROM attendance a JOIN employees e ON a.emp_id=e.id WHERE a.date='{date.today()}'", conn); conn.close()
+                conn = get_connection()
+                # Added punch_photo to the query
+                df = pd.read_sql(f"SELECT e.name, a.time_in, a.status, a.address, a.latitude, a.longitude, a.punch_photo FROM attendance a JOIN employees e ON a.emp_id=e.id WHERE a.date='{date.today()}'", conn); conn.close()
                 if not df.empty:
                     for i, r in df.iterrows():
-                        st.markdown(f"<div style='background:white;padding:15px;margin:5px;border-radius:10px;color:black'><b>{r['name']}</b> | {r['time_in']} | {r['status']}<br><a href='http://maps.google.com/?q={r['latitude']},{r['longitude']}' target='_blank'>📍 {r['address']}</a></div>", unsafe_allow_html=True)
+                        # Create a nice layout for each attendance entry
+                        with st.container():
+                            c1, c2 = st.columns([3, 1])
+                            with c1:
+                                st.markdown(f"### {r['name']}")
+                                st.markdown(f"**🕒 Time:** {r['time_in']}")
+                                st.markdown(f"**📍 Location:** [{r['address']}](https://www.google.com/maps/search/?api=1&query={r['latitude']},{r['longitude']})")
+                                if r['status'] == "Half Day":
+                                    st.warning("⚠️ LATE ENTRY (Half Day)")
+                                else:
+                                    st.success("✅ PRESENT")
+                            with c2:
+                                if r['punch_photo']:
+                                    st.image(r['punch_photo'], width=120, caption="Live Selfie")
+                            st.markdown("---")
                 else: st.info("No Data Today")
-            except: pass
+            except Exception as e: st.error(f"Error: {e}")
+            
         with t2:
             try:
                 conn = get_connection(); c = conn.cursor(); c.execute("SELECT id, name, salary FROM employees"); rows = c.fetchall(); conn.close()
