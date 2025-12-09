@@ -4,8 +4,13 @@ from datetime import datetime, time, timedelta, date
 import mysql.connector
 from io import BytesIO
 import os
+import random
+import requests  # Required for SMS
 from streamlit_js_eval import get_geolocation
 from geopy.geocoders import Nominatim
+
+# --- CONFIGURATION ---
+ADMIN_MOBILE = "9978815870"  # Admin Number for Password Resets
 
 # --- 1. CSS STYLING ---
 def apply_styling():
@@ -34,6 +39,10 @@ def apply_styling():
             background-color: white !important; color: #4ba3a8 !important; border: none;
         }
         .delete-btn > button { background-color: #e74c3c !important; color: white !important; }
+        .footer {
+            text-align: center; margin-top: 50px; padding: 20px; 
+            color: white; border-top: 1px solid rgba(255,255,255,0.2); font-size: 14px;
+        }
         </style>
     """, unsafe_allow_html=True)
 
@@ -45,199 +54,257 @@ def get_connection():
             host=creds["DB_HOST"], user=creds["DB_USER"], password=creds["DB_PASSWORD"],
             port=creds["DB_PORT"], database=creds["DB_NAME"], ssl_disabled=False
         )
-    else:
-        st.error("⚠ Database Secrets Missing in Streamlit Cloud!")
-        st.stop()
+    else: st.error("⚠ Secrets Missing!"); st.stop()
 
-# --- 3. FUNCTIONS ---
-def get_address(lat, lon):
+def init_db():
+    try:
+        conn = get_connection(); c = conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS employees (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255), designation VARCHAR(255), salary DOUBLE, pin VARCHAR(10), photo LONGBLOB)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS attendance (id INT AUTO_INCREMENT PRIMARY KEY, emp_id INT, date DATE, time_in VARCHAR(20), status VARCHAR(50), punch_photo LONGBLOB, latitude VARCHAR(50), longitude VARCHAR(50), address TEXT, UNIQUE KEY unique_att (emp_id, date))''')
+        c.execute('''CREATE TABLE IF NOT EXISTS admin_config (id INT PRIMARY KEY, password VARCHAR(255))''')
+        c.execute("INSERT IGNORE INTO admin_config (id, password) VALUES (1, 'admin')")
+        conn.commit(); conn.close()
+    except Exception as e: st.error(f"DB Init Error: {e}")
+
+# --- 3. REAL SMS FUNCTION (Fast2SMS) ---
+def send_otp_sms(mobile, otp, reason):
+    """
+    Sends Real SMS using Fast2SMS API.
+    """
+    try:
+        api_key = st.secrets["SMS_API_KEY"]
+        url = "https://www.fast2sms.com/dev/bulkV2"
+        
+        # Fast2SMS Quick SMS Route
+        message = f"National Air Condition Verification.\nYour OTP for {reason} is {otp}.\nDo not share this code."
+        
+        payload = {
+            "route": "q",
+            "message": message,
+            "language": "english",
+            "flash": 0,
+            "numbers": mobile,
+        }
+        
+        headers = {
+            'authorization': api_key,
+            'Content-Type': "application/x-www-form-urlencoded",
+            'Cache-Control': "no-cache",
+        }
+
+        response = requests.request("POST", url, data=payload, headers=headers)
+        
+        if response.status_code == 200:
+            return True
+        else:
+            print(f"SMS Failed: {response.text}") # Debugging
+            return False
+            
+    except Exception as e:
+        print(f"SMS Error: {e}")
+        return False
+
+def get_admin_password():
+    conn = get_connection(); c = conn.cursor()
+    c.execute("SELECT password FROM admin_config WHERE id=1"); pwd = c.fetchone()[0]; conn.close()
+    return pwd
+
+def update_admin_password(new_pass):
+    conn = get_connection(); c = conn.cursor()
+    c.execute("UPDATE admin_config SET password=%s WHERE id=1", (new_pass,)); conn.commit(); conn.close()
+
+def update_employee_pin(emp_id, new_pin):
+    conn = get_connection(); c = conn.cursor()
+    c.execute("UPDATE employees SET pin=%s WHERE id=%s", (new_pin, emp_id)); conn.commit(); conn.close()
+
+# --- 4. CORE LOGIC ---
+def get_address_from_coords(lat, lon):
     try:
         geolocator = Nominatim(user_agent="national_air_app")
-        loc = geolocator.reverse(f"{lat}, {lon}", timeout=10)
-        return loc.address if loc else "Unknown Location"
-    except: return "Location Error"
+        location = geolocator.reverse(f"{lat}, {lon}", timeout=10)
+        return location.address if location else "Unknown Location"
+    except: return "Location not found"
 
 def add_employee(name, designation, salary, pin):
     try:
-        conn = get_connection()
-        c = conn.cursor()
-        c.execute("INSERT INTO employees (name, designation, salary, pin, photo) VALUES (%s, %s, %s, %s, %s)", 
-                  (name, designation, salary, pin, b''))
-        conn.commit(); conn.close()
-        return True, "Success"
+        conn = get_connection(); c = conn.cursor()
+        c.execute("INSERT INTO employees (name, designation, salary, pin, photo) VALUES (%s, %s, %s, %s, %s)", (name, designation, salary, pin, b''))
+        conn.commit(); conn.close(); return True, "Success"
     except Exception as e: return False, str(e)
 
 def delete_employee(emp_id):
     try:
-        conn = get_connection()
-        c = conn.cursor()
+        conn = get_connection(); c = conn.cursor()
         c.execute("DELETE FROM attendance WHERE emp_id=%s", (emp_id,))
-        c.execute("DELETE FROM employees WHERE id=%s", (emp_id,))
-        conn.commit(); conn.close()
-        return True
+        c.execute("DELETE FROM employees WHERE id=%s", (emp_id,)); conn.commit(); conn.close(); return True
     except: return False
 
-def mark_attendance(emp_id, work_date, time_in_obj, photo, lat, lon, addr):
-    conn = get_connection()
-    c = conn.cursor()
-    status = "Half Day" if time_in_obj > time(10, 30) else "Present"
+def mark_attendance(emp_id, work_date, time_in_obj, punch_photo_bytes, lat, lon, addr):
+    conn = get_connection(); c = conn.cursor()
+    cutoff = time(10, 30); status = "Half Day" if time_in_obj > cutoff else "Present"
     try:
         c.execute("SELECT * FROM attendance WHERE emp_id=%s AND date=%s", (emp_id, work_date))
-        if c.fetchone():
-            st.error("⚠ Already Punched In Today!")
+        if c.fetchone(): st.error("⚠ Attendance already marked.")
         else:
-            c.execute("""INSERT INTO attendance (emp_id, date, time_in, status, punch_photo, latitude, longitude, address) 
-                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""", 
-                      (emp_id, work_date, time_in_obj.strftime("%H:%M"), status, photo, lat, lon, addr))
-            conn.commit()
-            if status == "Present": st.balloons(); st.success(f"✅ Success! Location: {addr}")
-            else: st.warning(f"⚠ Late Entry (Half Day) marked at {addr}")
+            c.execute("""INSERT INTO attendance (emp_id, date, time_in, status, punch_photo, latitude, longitude, address) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""", (emp_id, work_date, time_in_obj.strftime("%H:%M"), status, punch_photo_bytes, lat, lon, addr))
+            conn.commit(); st.balloons(); st.success(f"✅ MARKED {status.upper()} @ {addr}")
     except Exception as e: st.error(f"Error: {e}")
     finally: conn.close()
 
-def calculate_salary(emp_id, month, year, base_salary):
-    start_date = date(year, month-1, 5) if month > 1 else date(year-1, 12, 5)
-    end_date = date(year, month, 4)
-    conn = get_connection()
-    df = pd.read_sql(f"SELECT date, status FROM attendance WHERE emp_id={emp_id} AND date BETWEEN '{start_date}' AND '{end_date}'", conn)
-    conn.close()
-    
-    df['date'] = df['date'].astype(str)
-    att_map = dict(zip(df['date'], df['status']))
-    
-    payable_days = 0.0
-    report = []
-    curr = start_date
-    while curr <= end_date:
-        d_str = curr.strftime("%Y-%m-%d")
-        status = att_map.get(d_str, "Absent")
-        pay = 0.0; note = ""
-        
+def calculate_salary_logic(emp_id, pay_month, pay_year, base_salary):
+    start = date(pay_year, pay_month-1, 5) if pay_month > 1 else date(pay_year-1, 12, 5); end = date(pay_year, pay_month, 4)
+    conn = get_connection(); df = pd.read_sql(f"SELECT date, status FROM attendance WHERE emp_id={emp_id} AND date BETWEEN '{start}' AND '{end}'", conn); conn.close()
+    df['date'] = df['date'].astype(str); att_map = dict(zip(df['date'], df['status']))
+    pay_days = 0.0; report = []; curr = start
+    while curr <= end:
+        d_str = curr.strftime("%Y-%m-%d"); status = att_map.get(d_str, "Absent"); pay = 0.0; note = ""
         if curr.strftime("%A") == 'Sunday':
-            prev = (curr - timedelta(days=1)).strftime("%Y-%m-%d")
-            next_d = (curr + timedelta(days=1)).strftime("%Y-%m-%d")
-            if att_map.get(prev,"Absent") == "Absent" and att_map.get(next_d,"Absent") == "Absent":
-                pay = 0.0; note = "Sandwich Cut"
-            else: pay = 1.0; note = "Paid Wknd"
+            prev = (curr - timedelta(days=1)).strftime("%Y-%m-%d"); next_d = (curr + timedelta(days=1)).strftime("%Y-%m-%d")
+            if att_map.get(prev,"Absent")=="Absent" and att_map.get(next_d,"Absent")=="Absent": pay=0.0; note="Sandwich Cut"
+            else: pay=1.0; note="Paid Wknd"
         else:
-            if status == "Present": pay = 1.0
-            elif status == "Half Day": pay = 0.5; note = "Late"
-            else: pay = 0.0; note = "Absent"
-            
-        payable_days += pay
-        report.append([d_str, curr.strftime("%A"), status, pay, note])
-        curr += timedelta(days=1)
-        
-    return payable_days * (base_salary/30), payable_days, report
+            if status == "Present": pay=1.0
+            elif status == "Half Day": pay=0.5; note="Late"
+            else: pay=0.0; note="Absent"
+        pay_days += pay; report.append([d_str, curr.strftime("%A"), status, pay, note]); curr += timedelta(days=1)
+    return pay_days * (base_salary/30), pay_days, report
 
-# --- APP START ---
+# --- UI START ---
 if os.path.exists("logo.png"): st.set_page_config(page_title="National Air Condition", layout="wide", page_icon="logo.png")
 else: st.set_page_config(page_title="National Air Condition", layout="wide")
-
-apply_styling()
+apply_styling(); 
+if "connections" in st.secrets: init_db()
 
 if os.path.exists("logo.png"): st.sidebar.image("logo.png", width=200)
-st.sidebar.title("Attendance")
-role = st.sidebar.radio("Mode", ["Technician", "Admin"])
+st.sidebar.markdown("## Navigation")
+role = st.sidebar.radio("Go To", ["Technician / Staff", "Admin / Manager"])
 
-# --- TECHNICIAN VIEW ---
-if role == "Technician":
+# ---------------- TECHNICIAN ----------------
+if role == "Technician / Staff":
     col1, col2, col3 = st.columns([1,2,1])
     with col2:
         if os.path.exists("logo.png"): st.image("logo.png", use_container_width=True)
         st.markdown("<h2 style='text-align:center;'>Daily Check-In</h2>", unsafe_allow_html=True)
         
-        # GPS
-        loc = get_geolocation()
-        lat, lon = (loc['coords']['latitude'], loc['coords']['longitude']) if loc else (None, None)
-        if lat: st.success("📍 Location Found")
-        else: st.warning("⏳ Getting Location... Allow Permission")
+        loc = get_geolocation(); lat = loc['coords']['latitude'] if loc else None; lon = loc['coords']['longitude'] if loc else None
+        if lat: st.success("📍 Location Active")
+        else: st.warning("⏳ Waiting for GPS...")
 
         try:
-            conn = get_connection(); c = conn.cursor()
-            c.execute("SELECT id, name, designation FROM employees")
-            rows = c.fetchall(); conn.close()
-            
+            conn = get_connection(); c = conn.cursor(); c.execute("SELECT id, name, designation FROM employees"); rows = c.fetchall(); conn.close()
             if rows:
                 df = pd.DataFrame(rows, columns=['id', 'name', 'desig'])
-                emp_id = st.selectbox("Select Name", df['id'].tolist(), format_func=lambda x: df[df['id']==x]['name'].values[0])
-                details = df[df['id']==emp_id].iloc[0]
+                emp_id = st.selectbox("Select Name", df['id'], format_func=lambda x: df[df['id']==x]['name'].values[0])
+                st.markdown(f"<div class='tech-card'><h3>{df[df['id']==emp_id]['name'].values[0]}</h3><p>{df[df['id']==emp_id]['desig'].values[0]}</p></div>", unsafe_allow_html=True)
                 
-                st.markdown(f"<div class='tech-card'><h3>{details['name']}</h3><p>{details['desig']}</p></div>", unsafe_allow_html=True)
+                tab_punch, tab_reset = st.tabs(["📸 Punch In", "🔑 Forgot PIN?"])
                 
-                photo = st.camera_input("Take Selfie")
-                if photo and lat:
+                with tab_punch:
+                    photo = st.camera_input("Selfie")
+                    st.write("### 🔒 Security Check")
+                    pin = st.text_input("Enter PIN", type="password", max_chars=4, key="tech_pin")
                     if st.button("PUNCH IN"):
-                        addr = get_address(lat, lon)
-                        mark_attendance(emp_id, date.today(), datetime.now().time(), photo.getvalue(), str(lat), str(lon), addr)
-            else: st.info("No Staff Found.")
-        except Exception as e: st.error(f"Connection Error: {e}")
+                        real_pin = get_employee_details(emp_id)[1]
+                        if pin == real_pin and photo and lat:
+                            addr = get_address_from_coords(lat, lon)
+                            mark_attendance(emp_id, date.today(), datetime.now().time(), photo.getvalue(), str(lat), str(lon), addr)
+                        elif pin != real_pin: st.error("❌ Wrong PIN")
+                        elif not photo: st.error("📷 Photo Required")
+                        elif not lat: st.error("📍 Location Required")
 
-# --- ADMIN VIEW ---
-elif role == "Admin":
-    if 'auth' not in st.session_state: st.session_state.auth = False
+                with tab_reset:
+                    st.info(f"OTP will be sent to Admin Mobile: {ADMIN_MOBILE}")
+                    if st.button("Request PIN Reset OTP"):
+                        otp = random.randint(1000, 9999)
+                        st.session_state.reset_otp = otp
+                        st.session_state.reset_emp_id = emp_id
+                        # SENDING REAL SMS
+                        if send_otp_sms(ADMIN_MOBILE, otp, "PIN Reset"):
+                            st.success("✅ OTP Sent Successfully via SMS!")
+                        else:
+                            st.error("❌ SMS Failed. Check API Key.")
+                    
+                    if 'reset_otp' in st.session_state:
+                        entered_otp = st.text_input("Enter OTP from Admin", max_chars=4)
+                        new_pin_set = st.text_input("New PIN", max_chars=4, type="password")
+                        if st.button("Set New PIN"):
+                            if str(entered_otp) == str(st.session_state.reset_otp):
+                                update_employee_pin(st.session_state.reset_emp_id, new_pin_set)
+                                st.success("PIN Updated Successfully!")
+                                del st.session_state.reset_otp
+                            else: st.error("Invalid OTP")
+            else: st.info("No Staff Found")
+        except Exception as e: st.error(f"DB Error: {e}")
+
+# ---------------- ADMIN ----------------
+elif role == "Admin / Manager":
+    if 'admin_auth' not in st.session_state: st.session_state.admin_auth = False
     
-    if not st.session_state.auth:
+    if not st.session_state.admin_auth:
         col1, col2, col3 = st.columns([1,2,1])
         with col2:
             st.markdown("<br><div class='login-card'><h2>Admin Login</h2></div>", unsafe_allow_html=True)
-            if st.text_input("Password", type="password") == "admin":
-                st.session_state.auth = True; st.rerun()
+            l_tab1, l_tab2 = st.tabs(["Login", "Forgot Password?"])
+            
+            with l_tab1:
+                pwd = st.text_input("Password", type="password")
+                if st.button("Login"):
+                    if pwd == get_admin_password(): st.session_state.admin_auth = True; st.rerun()
+                    else: st.error("❌ Wrong Password")
+            
+            with l_tab2:
+                if st.button("Send Reset OTP"):
+                    otp = random.randint(1000, 9999)
+                    st.session_state.admin_otp = otp
+                    # SENDING REAL SMS
+                    if send_otp_sms(ADMIN_MOBILE, otp, "Admin Password Reset"):
+                        st.success(f"✅ OTP Sent to {ADMIN_MOBILE}")
+                    else:
+                        st.error("❌ SMS Failed. Check API Key.")
+                
+                if 'admin_otp' in st.session_state:
+                    a_otp = st.text_input("Enter OTP")
+                    new_a_pass = st.text_input("New Admin Password", type="password")
+                    if st.button("Update Password"):
+                        if str(a_otp) == str(st.session_state.admin_otp):
+                            update_admin_password(new_a_pass)
+                            st.success("Password Updated! Please Login.")
+                            del st.session_state.admin_otp
+                        else: st.error("Invalid OTP")
     else:
-        if st.button("Logout"): st.session_state.auth = False; st.rerun()
-        t1, t2, t3, t4 = st.tabs(["📊 Live Status", "💰 Payroll", "➕ Add Staff", "❌ Remove Staff"])
+        st.title("Admin Dashboard"); 
+        if st.button("Logout"): st.session_state.admin_auth = False; st.rerun()
         
+        t1, t2, t3, t4 = st.tabs(["📊 Live", "💰 Payroll", "➕ Add", "❌ Delete"])
         with t1:
             try:
-                conn = get_connection()
-                # Join to show names with attendance
-                df = pd.read_sql(f"SELECT e.name, a.time_in, a.status, a.address, a.latitude, a.longitude FROM attendance a JOIN employees e ON a.emp_id=e.id WHERE a.date='{date.today()}'", conn)
-                conn.close()
+                conn = get_connection(); df = pd.read_sql(f"SELECT e.name, a.time_in, a.status, a.address, a.latitude, a.longitude FROM attendance a JOIN employees e ON a.emp_id=e.id WHERE a.date='{date.today()}'", conn); conn.close()
                 if not df.empty:
-                    for i, row in df.iterrows():
-                        st.markdown(f"""
-                        <div style="background:white; padding:15px; margin-bottom:10px; border-radius:10px;">
-                            <b style="color:black; font-size:18px;">{row['name']}</b><br>
-                            <span style="color:black">Time: {row['time_in']} | Status: {row['status']}</span><br>
-                            <a href="https://maps.google.com/?q={row['latitude']},{row['longitude']}" target="_blank" style="color:blue; text-decoration:none;">📍 {row['address']}</a>
-                        </div>
-                        """, unsafe_allow_html=True)
-                else: st.info("No attendance today.")
-            except: st.error("Database Error")
-            
+                    for i, r in df.iterrows():
+                        st.markdown(f"<div style='background:white;padding:15px;margin:5px;border-radius:10px;color:black'><b>{r['name']}</b> | {r['time_in']} | {r['status']}<br><a href='http://maps.google.com/?q={r['latitude']},{r['longitude']}' target='_blank'>📍 {r['address']}</a></div>", unsafe_allow_html=True)
+                else: st.info("No Data Today")
+            except: pass
         with t2:
             try:
-                conn = get_connection(); c = conn.cursor()
-                c.execute("SELECT id, name, salary FROM employees"); rows = c.fetchall(); conn.close()
+                conn = get_connection(); c = conn.cursor(); c.execute("SELECT id, name, salary FROM employees"); rows = c.fetchall(); conn.close()
                 if rows:
                     df = pd.DataFrame(rows, columns=['id', 'name', 'salary'])
-                    sid = st.selectbox("Staff", df['id'], format_func=lambda x: df[df['id']==x]['name'].values[0])
-                    month = st.number_input("Month", 1, 12, datetime.now().month)
+                    s = st.selectbox("Staff", df['id'], format_func=lambda x: df[df['id']==x]['name'].values[0])
                     if st.button("Calculate"):
-                        sal, days, data = calculate_salary(sid, month, datetime.now().year, df[df['id']==sid]['salary'].values[0])
-                        st.success(f"Salary: ₹{sal:,.0f} ({days} days)")
-                        out = BytesIO()
-                        with pd.ExcelWriter(out, engine='openpyxl') as w: pd.DataFrame(data, columns=['Date','Day','Status','Credit','Note']).to_excel(w, index=False)
-                        st.download_button("Download Slip", out.getvalue(), "slip.xlsx")
-            except: st.error("Calc Error")
-            
+                        sal, days, rep = calculate_salary_logic(s, datetime.now().month, datetime.now().year, df[df['id']==s]['salary'].values[0])
+                        st.success(f"Pay: ₹{sal:,.0f}"); 
+            except: pass
         with t3:
             with st.form("add"):
                 n = st.text_input("Name"); d = st.text_input("Designation"); s = st.number_input("Salary", value=20000); p = st.text_input("PIN", max_chars=4)
-                if st.form_submit_button("Save"):
-                    if n and d and p: 
-                        add_employee(n, d, s, p); st.success("Added!")
-                    else: st.error("Fill all fields")
-                    
+                if st.form_submit_button("Save"): add_employee(n, d, s, p); st.success("Added!")
         with t4:
             try:
-                conn = get_connection(); c = conn.cursor()
-                c.execute("SELECT id, name FROM employees"); rows = c.fetchall(); conn.close()
+                conn = get_connection(); c = conn.cursor(); c.execute("SELECT id, name FROM employees"); rows = c.fetchall(); conn.close()
                 if rows:
                     df = pd.DataFrame(rows, columns=['id', 'name'])
-                    did = st.selectbox("Delete Staff", df['id'], format_func=lambda x: df[df['id']==x]['name'].values[0])
-                    if st.button("DELETE PERMANENTLY"):
-                        delete_employee(did); st.success("Deleted"); st.rerun()
+                    d_id = st.selectbox("Delete", df['id'], format_func=lambda x: df[df['id']==x]['name'].values[0])
+                    if st.button("PERMANENTLY DELETE"): delete_employee(d_id); st.success("Deleted"); st.rerun()
             except: pass
 
-st.markdown("<div class='footer'>© National Air Condition</div>", unsafe_allow_html=True)
+st.markdown("<div class='footer'>© National Air Condition<br>Website created by <b>Askan Shaikh</b></div>", unsafe_allow_html=True)
