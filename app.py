@@ -3,50 +3,95 @@ import pandas as pd
 from datetime import datetime, time, timedelta, date
 import mysql.connector
 from io import BytesIO
+import os
 
-# --- 1. CSS STYLING ---
+# --- 1. CSS STYLING (Fixed Dark Mode Issues) ---
 def apply_styling():
     st.markdown("""
         <style>
-        .stApp { background-color: #4ba3a8; }
-        h1, h2, h3, h4, h5, h6, p, span, div, label, li { color: white !important; }
-        .stTextInput input, .stNumberInput input, .stDateInput input, .stTimeInput input {
-            background-color: #ffffff !important; color: #000000 !important; border-radius: 5px;
+        /* 1. Main Background - Teal #4ba3a8 */
+        .stApp {
+            background-color: #4ba3a8; 
         }
-        div[data-baseweb="input"] { background-color: #ffffff !important; }
+        
+        /* 2. Force ALL Text to be White */
+        h1, h2, h3, h4, h5, h6, p, span, div, label, li {
+            color: white !important;
+        }
+        
+        /* 3. FIX INPUT BOXES (The Dark Bars Issue) */
+        /* Forces the input container to be white */
+        div[data-baseweb="input"] {
+            background-color: #ffffff !important;
+            border: 1px solid #ced4da !important;
+            border-radius: 5px !important;
+        }
+        /* Forces the text you type to be BLACK so it is visible */
+        input[type="text"], input[type="number"], input[type="password"] {
+            color: #000000 !important;
+            -webkit-text-fill-color: #000000 !important;
+            background-color: #ffffff !important;
+        }
+        
+        /* 4. Tech Card Design */
         .tech-card {
-            background-color: white; padding: 20px; border-radius: 15px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.2); text-align: center;
-            border-top: 8px solid #2c3e50; margin-bottom: 20px;
+            background-color: white; 
+            padding: 20px; 
+            border-radius: 15px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2); 
+            text-align: center;
+            border-top: 8px solid #2c3e50;
+            margin-bottom: 20px;
         }
-        .tech-card h3, .tech-card p { color: #2c3e50 !important; }
-        section[data-testid="stSidebar"] { background-color: #388e93; }
+        /* Override text color INSIDE the card to be Dark Blue */
+        .tech-card h3, .tech-card p {
+            color: #2c3e50 !important;
+        }
+        
+        /* 5. Sidebar & Buttons */
+        section[data-testid="stSidebar"] {
+            background-color: #388e93; 
+        }
         .stButton>button {
             width: 100%; height: 3.5em; border-radius: 8px; font-weight: bold;
             background-color: white !important; color: #4ba3a8 !important; border: none;
         }
+        
+        /* 6. Footer */
+        .footer {
+            text-align: center; margin-top: 50px; padding: 20px; 
+            color: white; border-top: 1px solid rgba(255,255,255,0.2);
+        }
         </style>
     """, unsafe_allow_html=True)
 
-# --- 2. CLOUD DATABASE CONNECTION ---
+# --- 2. CLOUD DATABASE CONNECTION (TiDB) ---
 def get_connection():
-    # This pulls the password from Streamlit Secrets (Secure Cloud Storage)
-    return mysql.connector.connect(
-        host=st.secrets["DB_HOST"],
-        user=st.secrets["DB_USER"],
-        password=st.secrets["DB_PASSWORD"],
-        port=st.secrets["DB_PORT"],
-        database=st.secrets["DB_NAME"]
-    )
+    # This specifically looks for the [connections.tidb] section we added to Secrets
+    if "connections" in st.secrets and "tidb" in st.secrets["connections"]:
+        creds = st.secrets["connections"]["tidb"]
+        return mysql.connector.connect(
+            host=creds["DB_HOST"],
+            user=creds["DB_USER"],
+            password=creds["DB_PASSWORD"],
+            port=creds["DB_PORT"],
+            database=creds["DB_NAME"],
+            ssl_disabled=False # Important for Cloud DBs
+        )
+    else:
+        st.error("⚠ Secrets not found! Please update Streamlit Secrets.")
+        st.stop()
 
 def init_db():
     try:
         conn = get_connection()
         c = conn.cursor()
+        # Employees Table
         c.execute('''CREATE TABLE IF NOT EXISTS employees 
                      (id INT AUTO_INCREMENT PRIMARY KEY, 
                       name VARCHAR(255), designation VARCHAR(255), 
                       salary DOUBLE, pin VARCHAR(10), photo LONGBLOB)''')
+        # Attendance Table
         c.execute('''CREATE TABLE IF NOT EXISTS attendance 
                      (id INT AUTO_INCREMENT PRIMARY KEY, 
                       emp_id INT, date DATE, time_in VARCHAR(20), 
@@ -55,7 +100,7 @@ def init_db():
         conn.commit()
         conn.close()
     except Exception as e:
-        st.error(f"Database Error: {e}")
+        st.error(f"Database Init Error: {e}")
 
 # --- 3. LOGIC FUNCTIONS ---
 def add_employee(name, designation, salary, pin, photo_bytes):
@@ -111,7 +156,7 @@ def calculate_salary_logic(emp_id, pay_month, pay_year, base_salary):
     else:
         start_date = date(pay_year, pay_month - 1, 5)
         end_date = date(pay_year, pay_month, 4)
-        
+    
     payable_days = 0.0
     report_data = []
     
@@ -152,110 +197,26 @@ def calculate_salary_logic(emp_id, pay_month, pay_year, base_salary):
     return total_salary, payable_days, report_data, start_date, end_date
 
 # --- UI SETUP ---
-st.set_page_config(page_title="National Air Condition", layout="wide", page_icon="❄")
+if os.path.exists("logo.png"):
+    st.set_page_config(page_title="National Air Condition", layout="wide", page_icon="logo.png")
+else:
+    st.set_page_config(page_title="National Air Condition", layout="wide", page_icon="❄")
+
 apply_styling()
 
-# Check for Secrets (To prevent crashing on local without secrets)
-if "DB_HOST" in st.secrets:
+# Check DB secrets
+if "connections" in st.secrets and "tidb" in st.secrets["connections"]:
     init_db()
 else:
-    st.error("⚠ Database Secrets not found! Please configure them in Streamlit Cloud.")
+    st.error("⚠ Secrets missing! Please see the guide to add them.")
     st.stop()
+
+# --- SIDEBAR LOGO ---
+if os.path.exists("logo.png"):
+    st.sidebar.image("logo.png", width=200)
 
 st.sidebar.markdown("## Attendance")
 role = st.sidebar.radio("Login Mode", ["Technician / Staff", "Admin / Manager"])
 
 if role == "Technician / Staff":
     col1, col2, col3 = st.columns([1,2,1])
-    with col2:
-        st.markdown("<h2 style='text-align:center;'>Daily Check-In</h2>", unsafe_allow_html=True)
-        try:
-            conn = get_connection()
-            c = conn.cursor()
-            c.execute("SELECT id, name, designation FROM employees")
-            rows = c.fetchall()
-            conn.close()
-            if rows:
-                emp_df = pd.DataFrame(rows, columns=['id', 'name', 'designation'])
-                emp_id = st.selectbox("Select Your Name", emp_df['id'].tolist(), format_func=lambda x: emp_df[emp_df['id']==x]['name'].values[0])
-                photo, real_pin = get_employee_details(emp_id)
-                details = emp_df[emp_df['id']==emp_id].iloc[0]
-                st.markdown(f"""
-                <div class="tech-card">
-                    <h3>{details['name']}</h3>
-                    <p>{details['designation']}</p>
-                </div>
-                """, unsafe_allow_html=True)
-                if photo: st.image(photo, width=150)
-                st.write("")
-                st.write("### 🔒 Security Check")
-                entered_pin = st.text_input("Enter Your Secret PIN", type="password", max_chars=4)
-                if st.button("PUNCH IN NOW"):
-                    if entered_pin == real_pin:
-                        mark_attendance(emp_id, date.today(), datetime.now().time())
-                    else:
-                        st.error("❌ WRONG PIN!")
-            else:
-                st.info("No technicians found.")
-        except Exception as e:
-             st.error(f"Database Connection Failed: {e}")
-
-elif role == "Admin / Manager":
-    pwd = st.sidebar.text_input("Password", type="password")
-    if pwd == "admin":
-        tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "💰 Payroll", "➕ Add Staff"])
-        with tab1:
-            st.subheader("Live Dashboard")
-            try:
-                conn = get_connection()
-                sql = "SELECT e.name, a.time_in, a.status FROM attendance a JOIN employees e ON a.emp_id = e.id WHERE a.date = %s"
-                c = conn.cursor()
-                c.execute(sql, (date.today(),))
-                rows = c.fetchall()
-                conn.close()
-                if rows:
-                    df = pd.DataFrame(rows, columns=['Name', 'Time In', 'Status'])
-                    st.dataframe(df, use_container_width=True)
-                else:
-                    st.info("No attendance marked today.")
-            except:
-                st.error("Database error")
-        with tab2:
-            st.subheader("Salary Calculation")
-            try:
-                conn = get_connection()
-                c = conn.cursor()
-                c.execute("SELECT id, name, salary FROM employees")
-                rows = c.fetchall()
-                conn.close()
-                if rows:
-                    emp_df = pd.DataFrame(rows, columns=['id', 'name', 'salary'])
-                    s_emp = st.selectbox("Technician", emp_df['id'].tolist(), format_func=lambda x: emp_df[emp_df['id']==x]['name'].values[0])
-                    pay_month = st.selectbox("Payout Month", range(1,13), index=datetime.now().month-1)
-                    if st.button("Calculate Salary"):
-                        base = emp_df[emp_df['id']==s_emp]['salary'].values[0]
-                        sal, days, report, s_d, e_d = calculate_salary_logic(s_emp, pay_month, datetime.now().year, base)
-                        st.success(f"Cycle: {s_d} to {e_d}")
-                        st.metric("Net Salary", f"₹ {sal:,.0f}")
-                        df_rep = pd.DataFrame(report, columns=["Date", "Day", "Status", "Credit", "Note"])
-                        output = BytesIO()
-                        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                            df_rep.to_excel(writer, index=False)
-                        st.download_button("📥 Download Excel", output.getvalue(), f"Salary_{s_emp}.xlsx")
-            except:
-                st.error("Database error")
-        with tab3:
-            st.subheader("Add Staff")
-            with st.form("add"):
-                n = st.text_input("Name")
-                d = st.text_input("Designation")
-                s = st.number_input("Salary", value=20000)
-                pin = st.text_input("PIN (4 Digits)", max_chars=4)
-                p = st.file_uploader("Photo", type=['jpg','png'])
-                if st.form_submit_button("Save"):
-                    if n and d and pin and p:
-                        success, msg = add_employee(n,d,s,pin,p.read())
-                        if success: st.success("Saved!")
-                        else: st.error(msg)
-                    else:
-                        st.error("All fields required")
