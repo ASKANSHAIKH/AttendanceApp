@@ -223,4 +223,120 @@ if role == "Technician / Staff":
                 st.markdown(f"""
                 <div style="background-color:white; padding:20px; border-radius:15px; text-align:center; border-top:5px solid #2c3e50;">
                     <h3 style="color:#2c3e50 !important;">{details['name']}</h3>
-                    <p style="color:#2c3e50 !important;">{details['
+                    <p style="color:#2c3e50 !important;">{details['designation']}</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                if photo: st.image(photo, width=150)
+                
+                st.write("")
+                st.write("### 🔒 Security Check")
+                entered_pin = st.text_input("Enter PIN", type="password", max_chars=4)
+                
+                if st.button("PUNCH IN NOW"):
+                    if entered_pin == real_pin:
+                        mark_attendance(emp_id, date.today(), datetime.now().time())
+                    else:
+                        st.error("❌ WRONG PIN!")
+            else:
+                st.info("No technicians found in Database.")
+        except Exception as e:
+             st.error(f"Database Connection Failed: {e}")
+
+# ================================
+# 2. ADMIN PAGE (WITH VISIBLE LOGIN)
+# ================================
+elif role == "Admin / Manager":
+    
+    # Session State for Login
+    if 'admin_logged_in' not in st.session_state:
+        st.session_state.admin_logged_in = False
+
+    if not st.session_state.admin_logged_in:
+        # SHOW LOGIN CARD
+        col1, col2, col3 = st.columns([1,2,1])
+        with col2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown("""
+            <div class="login-card">
+                <h2>Admin Login</h2>
+                <p>Enter password to access payroll.</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            password = st.text_input("Password", type="password")
+            
+            if st.button("Login"):
+                if password == "admin":
+                    st.session_state.admin_logged_in = True
+                    st.rerun()
+                else:
+                    st.error("❌ Incorrect Password")
+    
+    else:
+        # SHOW DASHBOARD
+        st.title("Admin Dashboard")
+        if st.button("Logout"):
+            st.session_state.admin_logged_in = False
+            st.rerun()
+
+        tab1, tab2, tab3 = st.tabs(["📊 Live Status", "💰 Payroll", "➕ Add Staff"])
+        
+        with tab1:
+            st.subheader("Live Attendance Today")
+            try:
+                conn = get_connection()
+                sql = "SELECT e.name, a.time_in, a.status FROM attendance a JOIN employees e ON a.emp_id = e.id WHERE a.date = %s"
+                c = conn.cursor()
+                c.execute(sql, (date.today(),))
+                rows = c.fetchall()
+                conn.close()
+                if rows:
+                    df = pd.DataFrame(rows, columns=['Name', 'Time In', 'Status'])
+                    st.dataframe(df, use_container_width=True)
+                else:
+                    st.info("No attendance marked today.")
+            except:
+                st.error("Database error")
+
+        with tab2:
+            st.subheader("Salary Calculation")
+            try:
+                conn = get_connection()
+                c = conn.cursor()
+                c.execute("SELECT id, name, salary FROM employees")
+                rows = c.fetchall()
+                conn.close()
+                if rows:
+                    emp_df = pd.DataFrame(rows, columns=['id', 'name', 'salary'])
+                    s_emp = st.selectbox("Technician", emp_df['id'].tolist(), format_func=lambda x: emp_df[emp_df['id']==x]['name'].values[0])
+                    pay_month = st.selectbox("Payout Month", range(1,13), index=datetime.now().month-1)
+                    if st.button("Calculate Salary"):
+                        base = emp_df[emp_df['id']==s_emp]['salary'].values[0]
+                        sal, days, report, s_d, e_d = calculate_salary_logic(s_emp, pay_month, datetime.now().year, base)
+                        st.success(f"Cycle: {s_d} to {e_d}")
+                        st.metric("Net Salary", f"₹ {sal:,.0f}")
+                        df_rep = pd.DataFrame(report, columns=["Date", "Day", "Status", "Credit", "Note"])
+                        output = BytesIO()
+                        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                            df_rep.to_excel(writer, index=False)
+                        st.download_button("📥 Download Excel", output.getvalue(), f"Salary_{s_emp}.xlsx")
+            except:
+                st.error("Database error")
+
+        with tab3:
+            st.subheader("Add New Staff")
+            with st.form("add"):
+                n = st.text_input("Name")
+                d = st.text_input("Designation")
+                s = st.number_input("Salary", value=20000)
+                pin = st.text_input("PIN (4 Digits)", max_chars=4)
+                p = st.file_uploader("Photo", type=['jpg','png'])
+                
+                if st.form_submit_button("Save"):
+                    if n and d and pin and p:
+                        success, msg = add_employee(n,d,s,pin,p.read())
+                        if success: st.success("Saved!")
+                        else: st.error(msg)
+                    else:
+                        st.error("All fields required")
