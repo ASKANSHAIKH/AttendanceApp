@@ -4,3 +4,4 @@ mysql-connector-python
 openpyxl
 streamlit-js-eval
 geopy
+requests
