@@ -5,69 +5,49 @@ import mysql.connector
 from io import BytesIO
 import os
 
-# --- 1. CSS STYLING (Fixed Dark Mode Issues) ---
+# --- 1. CSS STYLING ---
 def apply_styling():
     st.markdown("""
         <style>
-        /* 1. Main Background - Teal #4ba3a8 */
-        .stApp {
-            background-color: #4ba3a8; 
+        /* Main Background - Teal */
+        .stApp { background-color: #4ba3a8; }
+        
+        /* Text Colors */
+        h1, h2, h3, h4, h5, h6, p, span, label, li, div { color: white !important; }
+        
+        /* INPUT BOXES - Force White Background & Black Text */
+        .stTextInput input, .stNumberInput input, .stPasswordInput input {
+            background-color: #ffffff !important; 
+            color: #000000 !important; 
+            border: 1px solid #ddd;
         }
         
-        /* 2. Force ALL Text to be White */
-        h1, h2, h3, h4, h5, h6, p, span, div, label, li {
-            color: white !important;
-        }
-        
-        /* 3. FIX INPUT BOXES (The Dark Bars Issue) */
-        /* Forces the input container to be white */
-        div[data-baseweb="input"] {
-            background-color: #ffffff !important;
-            border: 1px solid #ced4da !important;
-            border-radius: 5px !important;
-        }
-        /* Forces the text you type to be BLACK so it is visible */
-        input[type="text"], input[type="number"], input[type="password"] {
-            color: #000000 !important;
-            -webkit-text-fill-color: #000000 !important;
-            background-color: #ffffff !important;
-        }
-        
-        /* 4. Tech Card Design */
-        .tech-card {
+        /* Admin Login Card Style */
+        .login-card {
             background-color: white; 
-            padding: 20px; 
-            border-radius: 15px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.2); 
+            padding: 30px; 
+            border-radius: 10px; 
             text-align: center;
-            border-top: 8px solid #2c3e50;
-            margin-bottom: 20px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            margin: auto;
+            border-top: 5px solid #2c3e50;
         }
-        /* Override text color INSIDE the card to be Dark Blue */
-        .tech-card h3, .tech-card p {
-            color: #2c3e50 !important;
-        }
+        .login-card h2, .login-card p { color: #2c3e50 !important; }
+
+        /* Sidebar */
+        section[data-testid="stSidebar"] { background-color: #388e93; }
         
-        /* 5. Sidebar & Buttons */
-        section[data-testid="stSidebar"] {
-            background-color: #388e93; 
-        }
+        /* Buttons */
         .stButton>button {
             width: 100%; height: 3.5em; border-radius: 8px; font-weight: bold;
             background-color: white !important; color: #4ba3a8 !important; border: none;
         }
-        
-        /* 6. Footer */
-        .footer {
-            text-align: center; margin-top: 50px; padding: 20px; 
-            color: white; border-top: 1px solid rgba(255,255,255,0.2);
-        }
         </style>
     """, unsafe_allow_html=True)
 
-# --- 2. CLOUD DATABASE CONNECTION (TiDB) ---
+# --- 2. DATABASE CONNECTION ---
 def get_connection():
-    # This specifically looks for the [connections.tidb] section we added to Secrets
+    # Load secrets from Streamlit Cloud
     if "connections" in st.secrets and "tidb" in st.secrets["connections"]:
         creds = st.secrets["connections"]["tidb"]
         return mysql.connector.connect(
@@ -76,22 +56,21 @@ def get_connection():
             password=creds["DB_PASSWORD"],
             port=creds["DB_PORT"],
             database=creds["DB_NAME"],
-            ssl_disabled=False # Important for Cloud DBs
+            ssl_disabled=False
         )
     else:
-        st.error("⚠ Secrets not found! Please update Streamlit Secrets.")
+        st.error("⚠ Secrets missing! Please check Streamlit Settings.")
         st.stop()
 
+# --- 3. FUNCTIONS ---
 def init_db():
     try:
         conn = get_connection()
         c = conn.cursor()
-        # Employees Table
         c.execute('''CREATE TABLE IF NOT EXISTS employees 
                      (id INT AUTO_INCREMENT PRIMARY KEY, 
                       name VARCHAR(255), designation VARCHAR(255), 
                       salary DOUBLE, pin VARCHAR(10), photo LONGBLOB)''')
-        # Attendance Table
         c.execute('''CREATE TABLE IF NOT EXISTS attendance 
                      (id INT AUTO_INCREMENT PRIMARY KEY, 
                       emp_id INT, date DATE, time_in VARCHAR(20), 
@@ -100,9 +79,8 @@ def init_db():
         conn.commit()
         conn.close()
     except Exception as e:
-        st.error(f"Database Init Error: {e}")
+        st.error(f"DB Init Error: {e}")
 
-# --- 3. LOGIC FUNCTIONS ---
 def add_employee(name, designation, salary, pin, photo_bytes):
     try:
         conn = get_connection()
@@ -204,19 +182,45 @@ else:
 
 apply_styling()
 
-# Check DB secrets
-if "connections" in st.secrets and "tidb" in st.secrets["connections"]:
+# Check Database Secrets
+if "connections" in st.secrets:
     init_db()
 else:
-    st.error("⚠ Secrets missing! Please see the guide to add them.")
+    st.error("⚠ DB Secrets missing!")
     st.stop()
 
-# --- SIDEBAR LOGO ---
+# --- SIDEBAR ---
 if os.path.exists("logo.png"):
     st.sidebar.image("logo.png", width=200)
 
-st.sidebar.markdown("## Attendance")
-role = st.sidebar.radio("Login Mode", ["Technician / Staff", "Admin / Manager"])
+st.sidebar.markdown("## Navigation")
+role = st.sidebar.radio("Go To", ["Technician / Staff", "Admin / Manager"])
 
+# ================================
+# 1. TECHNICIAN PAGE
+# ================================
 if role == "Technician / Staff":
     col1, col2, col3 = st.columns([1,2,1])
+    with col2:
+        if os.path.exists("logo.png"):
+            st.image("logo.png", use_container_width=True)
+            
+        st.markdown("<h2 style='text-align:center;'>Daily Check-In</h2>", unsafe_allow_html=True)
+        try:
+            conn = get_connection()
+            c = conn.cursor()
+            c.execute("SELECT id, name, designation FROM employees")
+            rows = c.fetchall()
+            conn.close()
+            
+            if rows:
+                emp_df = pd.DataFrame(rows, columns=['id', 'name', 'designation'])
+                emp_id = st.selectbox("Select Your Name", emp_df['id'].tolist(), format_func=lambda x: emp_df[emp_df['id']==x]['name'].values[0])
+                photo, real_pin = get_employee_details(emp_id)
+                details = emp_df[emp_df['id']==emp_id].iloc[0]
+                
+                # Show Tech Card
+                st.markdown(f"""
+                <div style="background-color:white; padding:20px; border-radius:15px; text-align:center; border-top:5px solid #2c3e50;">
+                    <h3 style="color:#2c3e50 !important;">{details['name']}</h3>
+                    <p style="color:#2c3e50 !important;">{details['
