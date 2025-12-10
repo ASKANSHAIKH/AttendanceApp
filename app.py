@@ -9,40 +9,39 @@ import requests
 from streamlit_js_eval import get_geolocation
 from geopy.geocoders import Nominatim
 
-# --- 1. CONFIGURATION & TIMEZONE SETUP ---
+# --- 1. CONFIGURATION ---
 if os.path.exists("logo.png"):
     st.set_page_config(page_title="National Air Condition", layout="wide", page_icon="logo.png")
 else:
-    st.set_page_config(page_title="National Air Condition", layout="wide", page_icon="❄️")
+    st.set_page_config(page_title="National Air Condition", layout="wide", page_icon="logo.png")
 
 ADMIN_MOBILE = "9978815870" 
 
-# --- IST TIMEZONE FIX ---
-def get_ist_time():
-    return datetime.utcnow() + timedelta(hours=5, minutes=30)
-
-# --- 2. CSS STYLING ---
+# --- 2. CSS STYLING (FIXED FOR MOBILE NAV) ---
 def apply_styling():
     st.markdown("""
         <style>
-        /* HIDE STREAMLIT UI */
-        #MainMenu {visibility: hidden;}
-        footer {visibility: hidden;}
-        header {visibility: hidden;}
-        [data-testid="stToolbar"] {visibility: hidden;} 
+        /* --- HIDE ONLY UNWANTED ELEMENTS --- */
+        #MainMenu {visibility: hidden;} /* Hides the 3-dot menu */
+        footer {visibility: hidden;}    /* Hides 'Made with Streamlit' */
+        [data-testid="stToolbar"] {visibility: hidden;} /* Hides Manage App button */
         .stDeployButton {display:none;}
         
-        /* Main Styling */
-        .stApp { background-color: #4ba3a8; margin-top: -50px; }
+        /* WE DO NOT HIDE HEADER ANYMORE TO KEEP SIDEBAR ARROW VISIBLE */
+        
+        /* Main Background - Teal */
+        .stApp { background-color: #4ba3a8; }
+        
+        /* Text Colors */
         h1, h2, h3, h4, h5, h6, p, span, div, label, li { color: white !important; }
         
-        /* Input & Dropdowns */
+        /* Input Boxes */
         .stTextInput input, .stNumberInput input, .stDateInput input, .stTimeInput input, .stPasswordInput input {
             background-color: #ffffff !important; color: #000000 !important; border-radius: 5px; border: 1px solid #ddd;
         }
-        div[data-baseweb="select"] > div {
-            background-color: #ffffff !important; color: #000000 !important; border-radius: 5px;
-        }
+        
+        /* Dropdowns */
+        div[data-baseweb="select"] > div { background-color: #ffffff !important; color: #000000 !important; border-radius: 5px; }
         div[data-baseweb="select"] span { color: #000000 !important; }
         div[data-baseweb="select"] svg { fill: #000000 !important; }
         ul[data-baseweb="menu"] { background-color: #ffffff !important; }
@@ -90,6 +89,9 @@ def init_db():
     except Exception as e: st.error(f"DB Init Error: {e}")
 
 # --- 4. FUNCTIONS ---
+def get_ist_time():
+    return datetime.utcnow() + timedelta(hours=5, minutes=30)
+
 def send_otp_sms(mobile, otp, reason):
     try:
         api_key = st.secrets["SMS_API_KEY"]
@@ -189,7 +191,14 @@ ist_now = get_ist_time()
 
 if os.path.exists("logo.png"): st.sidebar.image("logo.png", width=200)
 st.sidebar.markdown("## Navigation")
-role = st.sidebar.radio("Go To", ["Technician / Staff", "Admin / Manager"])
+
+# --- NAVIGATION HANDLING ---
+# Default to Technician, but allow overriding if the user clicks the secret button
+if 'nav_mode' not in st.session_state:
+    st.session_state.nav_mode = "Technician / Staff"
+
+# The Sidebar Radio updates the session state
+role = st.sidebar.radio("Go To", ["Technician / Staff", "Admin / Manager"], index=0 if st.session_state.nav_mode == "Technician / Staff" else 1, key="sidebar_role")
 
 # ---------------- TECHNICIAN ----------------
 if role == "Technician / Staff":
@@ -248,6 +257,13 @@ if role == "Technician / Staff":
                             else: st.error("Invalid OTP")
             else: st.info("No Staff Found")
         except Exception as e: st.error(f"DB Error: {e}")
+    
+    # --- FALLBACK ADMIN BUTTON (For when sidebar is hidden on mobile) ---
+    st.markdown("---")
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    if st.button("👮 Admin Login (Click Here if Sidebar is Hidden)"):
+        st.session_state.nav_mode = "Admin / Manager"
+        st.rerun()
 
 # ---------------- ADMIN ----------------
 elif role == "Admin / Manager":
@@ -274,6 +290,13 @@ elif role == "Admin / Manager":
                         if str(a_otp) == str(st.session_state.admin_otp):
                             update_admin_password(new_a_pass); st.success("Password Updated!"); del st.session_state.admin_otp
                         else: st.error("Invalid OTP")
+            
+            # Back Button
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("⬅️ Back to Technician Page"):
+                st.session_state.nav_mode = "Technician / Staff"
+                st.rerun()
+
     else:
         st.title("Admin Dashboard"); 
         if st.button("Logout"): st.session_state.admin_auth = False; st.rerun()
@@ -322,18 +345,14 @@ elif role == "Admin / Manager":
                 if rows:
                     df = pd.DataFrame(rows, columns=['id', 'name'])
                     d_id = st.selectbox("Select Employee", df['id'], format_func=lambda x: df[df['id']==x]['name'].values[0])
-                    
                     st.write("---")
                     col_del1, col_del2, col_del3 = st.columns(3)
-                    
                     with col_del1:
                         if st.button("🗑️ Delete TODAY'S Attendance"):
                             if delete_attendance(d_id, only_today=True): st.success("Today's record deleted!"); st.rerun()
-                    
                     with col_del2:
                         if st.button("⚠️ Delete ALL History"):
                             if delete_attendance(d_id, only_today=False): st.success("All history cleared!"); st.rerun()
-                            
                     with col_del3:
                         if st.button("❌ DELETE EMPLOYEE PERMANENTLY"):
                             delete_employee(d_id); st.success("Employee Deleted."); st.rerun()
