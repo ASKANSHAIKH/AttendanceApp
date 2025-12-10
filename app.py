@@ -18,7 +18,6 @@ else:
 ADMIN_MOBILE = "9978815870" 
 
 # --- IST TIMEZONE FIX ---
-# Cloud servers use UTC. We add 5 hours 30 mins to get India Time.
 def get_ist_time():
     return datetime.utcnow() + timedelta(hours=5, minutes=30)
 
@@ -136,8 +135,18 @@ def delete_employee(emp_id):
         c.execute("DELETE FROM employees WHERE id=%s", (emp_id,)); conn.commit(); conn.close(); return True
     except: return False
 
+def delete_attendance(emp_id, only_today=False):
+    try:
+        conn = get_connection(); c = conn.cursor()
+        if only_today:
+            today_date = get_ist_time().date()
+            c.execute("DELETE FROM attendance WHERE emp_id=%s AND date=%s", (emp_id, today_date))
+        else:
+            c.execute("DELETE FROM attendance WHERE emp_id=%s", (emp_id,))
+        conn.commit(); conn.close(); return True
+    except: return False
+
 def mark_attendance(emp_id, punch_photo_bytes, lat, lon, addr):
-    # USE IST TIME
     ist_now = get_ist_time()
     work_date = ist_now.date()
     time_in_obj = ist_now.time()
@@ -176,7 +185,6 @@ def calculate_salary_logic(emp_id, pay_month, pay_year, base_salary):
 apply_styling()
 if "connections" in st.secrets: init_db()
 
-# Global Clock for UI
 ist_now = get_ist_time()
 
 if os.path.exists("logo.png"): st.sidebar.image("logo.png", width=200)
@@ -270,11 +278,10 @@ elif role == "Admin / Manager":
         st.title("Admin Dashboard"); 
         if st.button("Logout"): st.session_state.admin_auth = False; st.rerun()
         
-        t1, t2, t3, t4 = st.tabs(["📊 Live Status", "💰 Payroll", "➕ Add", "❌ Delete"])
+        t1, t2, t3, t4 = st.tabs(["📊 Live Status", "💰 Payroll", "➕ Add", "❌ Manage Data"])
         with t1:
             try:
                 conn = get_connection()
-                # USE IST DATE FOR QUERY
                 query_date = get_ist_time().date()
                 df = pd.read_sql(f"SELECT e.name, a.time_in, a.status, a.address, a.latitude, a.longitude, a.punch_photo FROM attendance a JOIN employees e ON a.emp_id=e.id WHERE a.date='{query_date}'", conn); conn.close()
                 if not df.empty:
@@ -299,7 +306,6 @@ elif role == "Admin / Manager":
                 if rows:
                     df = pd.DataFrame(rows, columns=['id', 'name', 'salary'])
                     s = st.selectbox("Staff", df['id'], format_func=lambda x: df[df['id']==x]['name'].values[0])
-                    # USE IST DATE FOR DEFAULTS
                     ist_dt = get_ist_time()
                     if st.button("Calculate"):
                         sal, days, rep = calculate_salary_logic(s, ist_dt.month, ist_dt.year, df[df['id']==s]['salary'].values[0])
@@ -310,12 +316,27 @@ elif role == "Admin / Manager":
                 n = st.text_input("Name"); d = st.text_input("Designation"); s = st.number_input("Salary", value=20000); p = st.text_input("PIN", max_chars=4)
                 if st.form_submit_button("Save"): add_employee(n, d, s, p); st.success("Added!")
         with t4:
+            st.subheader("Manage Staff & Data")
             try:
                 conn = get_connection(); c = conn.cursor(); c.execute("SELECT id, name FROM employees"); rows = c.fetchall(); conn.close()
                 if rows:
                     df = pd.DataFrame(rows, columns=['id', 'name'])
-                    d_id = st.selectbox("Delete", df['id'], format_func=lambda x: df[df['id']==x]['name'].values[0])
-                    if st.button("PERMANENTLY DELETE"): delete_employee(d_id); st.success("Deleted"); st.rerun()
+                    d_id = st.selectbox("Select Employee", df['id'], format_func=lambda x: df[df['id']==x]['name'].values[0])
+                    
+                    st.write("---")
+                    col_del1, col_del2, col_del3 = st.columns(3)
+                    
+                    with col_del1:
+                        if st.button("🗑️ Delete TODAY'S Attendance"):
+                            if delete_attendance(d_id, only_today=True): st.success("Today's record deleted!"); st.rerun()
+                    
+                    with col_del2:
+                        if st.button("⚠️ Delete ALL History"):
+                            if delete_attendance(d_id, only_today=False): st.success("All history cleared!"); st.rerun()
+                            
+                    with col_del3:
+                        if st.button("❌ DELETE EMPLOYEE PERMANENTLY"):
+                            delete_employee(d_id); st.success("Employee Deleted."); st.rerun()
             except: pass
 
 st.markdown("<div class='footer'>© National Air Condition<br>Website created by <b>Askan Shaikh</b></div>", unsafe_allow_html=True)
