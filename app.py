@@ -13,7 +13,7 @@ from geopy.geocoders import Nominatim
 if os.path.exists("logo.png"):
     st.set_page_config(page_title="National Air Condition", layout="wide", page_icon="logo.png")
 else:
-    st.set_page_config(page_title="National Air Condition", layout="wide", page_icon="❄️")
+    st.set_page_config(page_title="National Air Condition", layout="wide", page_icon="logo.png")
 
 ADMIN_MOBILE = "9978815870" 
 
