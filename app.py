@@ -9,73 +9,60 @@ import requests
 from streamlit_js_eval import get_geolocation
 from geopy.geocoders import Nominatim
 
-# --- 1. CONFIGURATION & PAGE SETUP ---
+# --- 1. CONFIGURATION & TIMEZONE SETUP ---
 if os.path.exists("logo.png"):
     st.set_page_config(page_title="National Air Condition", layout="wide", page_icon="logo.png")
 else:
-    st.set_page_config(page_title="National Air Condition", layout="wide", page_icon="logo.png")
+    st.set_page_config(page_title="National Air Condition", layout="wide", page_icon="❄️")
 
 ADMIN_MOBILE = "9978815870" 
+
+# --- IST TIMEZONE FIX ---
+# Cloud servers use UTC. We add 5 hours 30 mins to get India Time.
+def get_ist_time():
+    return datetime.utcnow() + timedelta(hours=5, minutes=30)
 
 # --- 2. CSS STYLING ---
 def apply_styling():
     st.markdown("""
         <style>
-        /* --- HIDE STREAMLIT UI --- */
+        /* HIDE STREAMLIT UI */
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
         header {visibility: hidden;}
         [data-testid="stToolbar"] {visibility: hidden;} 
         .stDeployButton {display:none;}
         
-        /* Main Background - Teal */
+        /* Main Styling */
         .stApp { background-color: #4ba3a8; margin-top: -50px; }
-        
-        /* General Text Colors */
         h1, h2, h3, h4, h5, h6, p, span, div, label, li { color: white !important; }
         
-        /* --- INPUT BOXES --- */
+        /* Input & Dropdowns */
         .stTextInput input, .stNumberInput input, .stDateInput input, .stTimeInput input, .stPasswordInput input {
-            background-color: #ffffff !important; 
-            color: #000000 !important; 
-            border-radius: 5px; 
-            border: 1px solid #ddd;
+            background-color: #ffffff !important; color: #000000 !important; border-radius: 5px; border: 1px solid #ddd;
         }
-        
-        /* --- DROPDOWN (SELECTBOX) STYLING --- */
         div[data-baseweb="select"] > div {
-            background-color: #ffffff !important;
-            color: #000000 !important;
-            border-color: #ddd !important;
-            border-radius: 5px;
+            background-color: #ffffff !important; color: #000000 !important; border-radius: 5px;
         }
         div[data-baseweb="select"] span { color: #000000 !important; }
         div[data-baseweb="select"] svg { fill: #000000 !important; }
         ul[data-baseweb="menu"] { background-color: #ffffff !important; }
         li[data-baseweb="option"] { color: #000000 !important; }
         
-        /* --- CARDS --- */
-        .login-card {
-            background-color: white; padding: 30px; border-radius: 10px; text-align: center;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.2); margin: auto; border-top: 5px solid #2c3e50;
+        /* Cards */
+        .login-card, .tech-card {
+            background-color: white; padding: 20px; border-radius: 15px; text-align: center;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2); margin: auto; border-top: 5px solid #2c3e50; margin-bottom: 20px;
         }
-        .login-card h2, .login-card p { color: #2c3e50 !important; }
+        .login-card h2, .login-card p, .tech-card h3, .tech-card p { color: #2c3e50 !important; }
         
-        .tech-card {
-            background-color: white; padding: 20px; border-radius: 15px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.2); text-align: center; border-top: 8px solid #2c3e50; margin-bottom: 20px;
-        }
-        .tech-card h3, .tech-card p { color: #2c3e50 !important; }
-        
-        /* Sidebar & Buttons */
-        section[data-testid="stSidebar"] { background-color: #388e93; }
+        /* Buttons */
         .stButton>button {
             width: 100%; height: 3.5em; border-radius: 8px; font-weight: bold;
             background-color: white !important; color: #4ba3a8 !important; border: none;
         }
         .delete-btn > button { background-color: #e74c3c !important; color: white !important; }
         
-        /* Footer */
         .footer {
             text-align: center; margin-top: 50px; padding: 20px; 
             color: white; border-top: 1px solid rgba(255,255,255,0.2); font-size: 14px;
@@ -149,15 +136,21 @@ def delete_employee(emp_id):
         c.execute("DELETE FROM employees WHERE id=%s", (emp_id,)); conn.commit(); conn.close(); return True
     except: return False
 
-def mark_attendance(emp_id, work_date, time_in_obj, punch_photo_bytes, lat, lon, addr):
+def mark_attendance(emp_id, punch_photo_bytes, lat, lon, addr):
+    # USE IST TIME
+    ist_now = get_ist_time()
+    work_date = ist_now.date()
+    time_in_obj = ist_now.time()
+    
     conn = get_connection(); c = conn.cursor()
     cutoff = time(10, 30); status = "Half Day" if time_in_obj > cutoff else "Present"
     try:
         c.execute("SELECT * FROM attendance WHERE emp_id=%s AND date=%s", (emp_id, work_date))
         if c.fetchone(): st.error("⚠️ Attendance already marked.")
         else:
-            c.execute("""INSERT INTO attendance (emp_id, date, time_in, status, punch_photo, latitude, longitude, address) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""", (emp_id, work_date, time_in_obj.strftime("%H:%M"), status, punch_photo_bytes, lat, lon, addr))
-            conn.commit(); st.balloons(); st.success(f"✅ MARKED {status.upper()} @ {addr}")
+            c.execute("""INSERT INTO attendance (emp_id, date, time_in, status, punch_photo, latitude, longitude, address) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""", 
+                      (emp_id, work_date, time_in_obj.strftime("%H:%M"), status, punch_photo_bytes, lat, lon, addr))
+            conn.commit(); st.balloons(); st.success(f"✅ MARKED {status.upper()} @ {time_in_obj.strftime('%I:%M %p')}")
     except Exception as e: st.error(f"Error: {e}")
     finally: conn.close()
 
@@ -183,6 +176,9 @@ def calculate_salary_logic(emp_id, pay_month, pay_year, base_salary):
 apply_styling()
 if "connections" in st.secrets: init_db()
 
+# Global Clock for UI
+ist_now = get_ist_time()
+
 if os.path.exists("logo.png"): st.sidebar.image("logo.png", width=200)
 st.sidebar.markdown("## Navigation")
 role = st.sidebar.radio("Go To", ["Technician / Staff", "Admin / Manager"])
@@ -192,7 +188,7 @@ if role == "Technician / Staff":
     col1, col2, col3 = st.columns([1,2,1])
     with col2:
         if os.path.exists("logo.png"): st.image("logo.png", use_container_width=True)
-        st.markdown("<h2 style='text-align:center;'>Daily Check-In</h2>", unsafe_allow_html=True)
+        st.markdown(f"<h3 style='text-align:center;'>{ist_now.strftime('%d %b %Y | %I:%M %p')}</h3>", unsafe_allow_html=True)
         
         loc = get_geolocation(); lat = loc['coords']['latitude'] if loc else None; lon = loc['coords']['longitude'] if loc else None
         if lat: st.success("📍 Location Active")
@@ -204,15 +200,11 @@ if role == "Technician / Staff":
                 df = pd.DataFrame(rows, columns=['id', 'name', 'desig'])
                 emp_id = st.selectbox("Select Name", df['id'], format_func=lambda x: df[df['id']==x]['name'].values[0])
                 
-                # --- FIXED: SAFER CARD DISPLAY LOGIC ---
                 row = df[df['id']==emp_id].iloc[0]
-                tech_name = row['name']
-                tech_desig = row['desig']
-                
                 st.markdown(f"""
                 <div class='tech-card'>
-                    <h3>{tech_name}</h3>
-                    <p>{tech_desig}</p>
+                    <h3>{row['name']}</h3>
+                    <p>{row['desig']}</p>
                 </div>
                 """, unsafe_allow_html=True)
                 
@@ -227,7 +219,7 @@ if role == "Technician / Staff":
                         
                         if pin == real_pin and photo and lat:
                             addr = get_address_from_coords(lat, lon)
-                            mark_attendance(emp_id, date.today(), datetime.now().time(), photo.getvalue(), str(lat), str(lon), addr)
+                            mark_attendance(emp_id, photo.getvalue(), str(lat), str(lon), addr)
                         elif pin != real_pin: st.error("❌ Wrong PIN")
                         elif not photo: st.error("📷 Photo Required")
                         elif not lat: st.error("📍 Location Required")
@@ -235,9 +227,7 @@ if role == "Technician / Staff":
                 with tab_reset:
                     st.info(f"OTP sent to Admin: {ADMIN_MOBILE}")
                     if st.button("Request PIN Reset OTP"):
-                        otp = random.randint(1000, 9999)
-                        st.session_state.reset_otp = otp
-                        st.session_state.reset_emp_id = emp_id
+                        otp = random.randint(1000, 9999); st.session_state.reset_otp = otp; st.session_state.reset_emp_id = emp_id
                         if send_otp_sms(ADMIN_MOBILE, otp, "PIN Reset"): st.success("✅ OTP Sent!")
                         else: st.error("❌ SMS Failed")
                     
@@ -246,9 +236,7 @@ if role == "Technician / Staff":
                         new_pin_set = st.text_input("New PIN", max_chars=4, type="password")
                         if st.button("Set New PIN"):
                             if str(entered_otp) == str(st.session_state.reset_otp):
-                                update_employee_pin(st.session_state.reset_emp_id, new_pin_set)
-                                st.success("PIN Updated!")
-                                del st.session_state.reset_otp
+                                update_employee_pin(st.session_state.reset_emp_id, new_pin_set); st.success("PIN Updated!"); del st.session_state.reset_otp
                             else: st.error("Invalid OTP")
             else: st.info("No Staff Found")
         except Exception as e: st.error(f"DB Error: {e}")
@@ -286,7 +274,9 @@ elif role == "Admin / Manager":
         with t1:
             try:
                 conn = get_connection()
-                df = pd.read_sql(f"SELECT e.name, a.time_in, a.status, a.address, a.latitude, a.longitude, a.punch_photo FROM attendance a JOIN employees e ON a.emp_id=e.id WHERE a.date='{date.today()}'", conn); conn.close()
+                # USE IST DATE FOR QUERY
+                query_date = get_ist_time().date()
+                df = pd.read_sql(f"SELECT e.name, a.time_in, a.status, a.address, a.latitude, a.longitude, a.punch_photo FROM attendance a JOIN employees e ON a.emp_id=e.id WHERE a.date='{query_date}'", conn); conn.close()
                 if not df.empty:
                     for i, r in df.iterrows():
                         with st.container():
@@ -309,8 +299,10 @@ elif role == "Admin / Manager":
                 if rows:
                     df = pd.DataFrame(rows, columns=['id', 'name', 'salary'])
                     s = st.selectbox("Staff", df['id'], format_func=lambda x: df[df['id']==x]['name'].values[0])
+                    # USE IST DATE FOR DEFAULTS
+                    ist_dt = get_ist_time()
                     if st.button("Calculate"):
-                        sal, days, rep = calculate_salary_logic(s, datetime.now().month, datetime.now().year, df[df['id']==s]['salary'].values[0])
+                        sal, days, rep = calculate_salary_logic(s, ist_dt.month, ist_dt.year, df[df['id']==s]['salary'].values[0])
                         st.success(f"Pay: ₹{sal:,.0f}"); 
             except: pass
         with t3:
