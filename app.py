@@ -15,7 +15,7 @@ st.set_page_config(page_title="National Air Condition", layout="wide", page_icon
 
 ADMIN_MOBILE = "9978815870"
 
-# --- 2. PROFESSIONAL STYLING ---
+# --- 2. CSS STYLING ---
 def apply_styling():
     st.markdown("""
         <style>
@@ -31,7 +31,7 @@ def apply_styling():
             background-color: white !important; color: black !important; border: 1px solid #ddd; border-radius: 8px;
         }
         
-        /* Dropdown Styling */
+        /* Dropdowns */
         div[data-baseweb="select"] > div { background-color: white !important; color: black !important; border-color: #ddd !important; }
         div[data-baseweb="select"] span { color: black !important; }
         ul[data-baseweb="menu"] { background-color: white !important; }
@@ -73,6 +73,7 @@ def get_db_connection():
 def run_query(query, params=None, fetch=True):
     try:
         conn = get_db_connection()
+        # Auto-reconnect if connection died
         if not conn or not conn.is_connected():
             st.cache_resource.clear()
             conn = get_db_connection()
