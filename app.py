@@ -17,7 +17,6 @@ ADMIN_MOBILE = "9978815870"
 # --- 2. DYNAMIC STYLING ENGINE ---
 def apply_theme(theme_mode):
     if theme_mode == "Dark":
-        # DARK MODE COLORS
         bg_color = "#0E1117"
         card_bg = "#262730"
         text_color = "#FAFAFA"
@@ -25,7 +24,6 @@ def apply_theme(theme_mode):
         sidebar_bg = "#161B21"
         border_color = "#444"
     else:
-        # LIGHT MODE COLORS
         bg_color = "#f0f2f6"
         card_bg = "#ffffff"
         text_color = "#0e3b43"
@@ -35,60 +33,31 @@ def apply_theme(theme_mode):
 
     st.markdown(f"""
         <style>
-        /* HIDE DEFAULTS */
         #MainMenu, footer, header, [data-testid="stToolbar"] {{visibility: hidden;}}
         .stDeployButton {{display:none;}}
-        
-        /* MAIN BACKGROUND */
         .stApp {{ background-color: {bg_color}; }}
-        
-        /* SIDEBAR */
         section[data-testid="stSidebar"] {{ background-color: {sidebar_bg}; }}
-        section[data-testid="stSidebar"] h1, section[data-testid="stSidebar"] span, section[data-testid="stSidebar"] label {{
-            color: white !important;
-        }}
-        
-        /* TEXT COLORS */
+        section[data-testid="stSidebar"] h1, section[data-testid="stSidebar"] span, section[data-testid="stSidebar"] label {{ color: white !important; }}
         h1, h2, h3, p, div, span, label, li {{ color: {text_color} !important; font-family: 'Helvetica', sans-serif; }}
-        
-        /* INPUT FIELDS */
         .stTextInput input, .stNumberInput input, .stDateInput input, .stPasswordInput input {{
-            background-color: {input_bg} !important;
-            color: {text_color} !important;
-            border: 1px solid {border_color};
-            border-radius: 8px;
+            background-color: {input_bg} !important; color: {text_color} !important; border: 1px solid {border_color}; border-radius: 8px;
         }}
-        
-        /* DROPDOWNS */
         div[data-baseweb="select"] > div {{
-            background-color: {input_bg} !important;
-            color: {text_color} !important;
-            border-color: {border_color} !important;
+            background-color: {input_bg} !important; color: {text_color} !important; border-color: {border_color} !important;
         }}
         div[data-baseweb="select"] span {{ color: {text_color} !important; }}
-        
-        /* BUTTONS (Gradient Teal - Always Bright) */
         .stButton>button {{
             width: 100%; height: 45px; border-radius: 8px; font-weight: 600;
             background: linear-gradient(90deg, #4ba3a8 0%, #2c7a7f 100%);
             color: white !important; border: none; box-shadow: 0 4px 6px rgba(0,0,0,0.2);
         }}
-        .stButton>button:hover {{ transform: translateY(-2px); }}
-        
-        /* CARDS */
         .dashboard-card {{
             background: {card_bg}; padding: 20px; border-radius: 12px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.1); border-top: 5px solid #4ba3a8;
-            margin-bottom: 15px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1); border-top: 5px solid #4ba3a8; margin-bottom: 15px;
         }}
-        
-        /* ATTENDANCE LIST ITEM */
         .att-item {{
-            background: {card_bg}; padding: 15px; border-radius: 8px;
-            border: 1px solid {border_color}; margin-bottom: 10px;
+            background: {card_bg}; padding: 15px; border-radius: 8px; border: 1px solid {border_color}; margin-bottom: 10px;
         }}
-        
-        /* FOOTER */
         .footer {{
             position: fixed; bottom: 0; left: 0; width: 100%;
             background: {card_bg}; text-align: center; padding: 10px;
@@ -111,8 +80,7 @@ def get_db_connection():
 def run_query(query, params=None, fetch=True):
     try:
         conn = get_db_connection()
-        if not conn or not conn.is_connected():
-            st.cache_resource.clear(); conn = get_db_connection()
+        if not conn or not conn.is_connected(): st.cache_resource.clear(); conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(query, params or ())
         if fetch: return cursor.fetchall()
@@ -151,7 +119,6 @@ init_app()
 if os.path.exists("logo.png"): st.sidebar.image("logo.png", width=200)
 st.sidebar.title("MENU")
 
-# Theme Switcher
 theme = st.sidebar.select_slider("Theme Mode", options=["Light", "Dark"])
 apply_theme(theme)
 
@@ -163,6 +130,11 @@ if st.sidebar.button("👮 Admin Panel"): st.session_state.nav = 'Admin'
 if st.session_state.nav == 'Technician':
     col1, col2, col3 = st.columns([1,2,1])
     with col2:
+        # --- LOGO ADDED HERE ---
+        if os.path.exists("logo.png"): 
+            st.image("logo.png", use_container_width=True)
+        # -----------------------
+        
         st.markdown(f"<h3 style='text-align:center;'>Daily Attendance</h3>", unsafe_allow_html=True)
         st.markdown(f"<p style='text-align:center;'>{get_ist_time().strftime('%d %b %Y | %I:%M %p')}</p>", unsafe_allow_html=True)
         
@@ -240,10 +212,11 @@ elif st.session_state.nav == 'Admin':
             else: st.info("No attendance yet.")
 
         with menu[1]:
+            st.subheader("Salary Calculator")
             emp_data = run_query("SELECT id, name, salary FROM employees")
             if emp_data:
                 df = pd.DataFrame(emp_data, columns=['id', 'name', 'salary'])
-                s_emp = st.selectbox("Staff", df['id'], format_func=lambda x: df[df['id']==x]['name'].values[0])
+                s_emp = st.selectbox("Select Staff", df['id'], format_func=lambda x: df[df['id']==x]['name'].values[0])
                 if st.button("Generate Slip"):
                     s_date = date(datetime.now().year, datetime.now().month-1, 5)
                     e_date = date(datetime.now().year, datetime.now().month, 5)
