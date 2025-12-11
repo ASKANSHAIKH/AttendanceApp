@@ -15,7 +15,7 @@ st.set_page_config(page_title="National Air Condition", layout="wide", page_icon
 
 ADMIN_MOBILE = "9978815870"
 
-# --- 2. STYLING ---
+# --- 2. PROFESSIONAL STYLING ---
 def apply_styling():
     st.markdown("""
         <style>
@@ -31,8 +31,11 @@ def apply_styling():
             background-color: white !important; color: black !important; border: 1px solid #ddd; border-radius: 8px;
         }
         
+        /* Dropdown Styling */
         div[data-baseweb="select"] > div { background-color: white !important; color: black !important; border-color: #ddd !important; }
         div[data-baseweb="select"] span { color: black !important; }
+        ul[data-baseweb="menu"] { background-color: white !important; }
+        li[data-baseweb="option"] { color: black !important; }
         
         .stButton>button {
             width: 100%; height: 45px; border-radius: 8px; font-weight: 600;
@@ -55,9 +58,10 @@ def apply_styling():
         </style>
     """, unsafe_allow_html=True)
 
-# --- 3. DATABASE ENGINE ---
-@st.cache_resource
+# --- 3. DATABASE ENGINE (CACHED FOR SPEED) ---
+@st.cache_resource(ttl=3600)
 def get_db_connection():
+    # Only connects ONCE per hour, preventing crashes
     if "connections" in st.secrets and "tidb" in st.secrets["connections"]:
         creds = st.secrets["connections"]["tidb"]
         return mysql.connector.connect(
@@ -69,15 +73,25 @@ def get_db_connection():
 def run_query(query, params=None, fetch=True):
     try:
         conn = get_db_connection()
-        if not conn or not conn.is_connected(): st.cache_resource.clear(); conn = get_db_connection()
+        if not conn or not conn.is_connected():
+            st.cache_resource.clear()
+            conn = get_db_connection()
+        
         cursor = conn.cursor()
         cursor.execute(query, params or ())
-        if fetch: return cursor.fetchall()
-        else: conn.commit(); return True
-    except Exception as e: return str(e)
+        
+        if fetch:
+            result = cursor.fetchall()
+            return result
+        else:
+            conn.commit()
+            return True
+    except Exception as e:
+        return str(e)
 
-# --- 4. INITIALIZATION ---
+# --- 4. AUTO-REPAIR INITIALIZATION ---
 def init_app():
+    # Runs automatically to fix "Table doesn't exist" errors
     run_query('''CREATE TABLE IF NOT EXISTS employees (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255), designation VARCHAR(255), salary DOUBLE, pin VARCHAR(10), photo LONGBLOB)''', fetch=False)
     run_query('''CREATE TABLE IF NOT EXISTS attendance (id INT AUTO_INCREMENT PRIMARY KEY, emp_id INT, date DATE, time_in VARCHAR(20), status VARCHAR(50), punch_photo LONGBLOB, latitude VARCHAR(50), longitude VARCHAR(50), address TEXT, UNIQUE KEY unique_att (emp_id, date))''', fetch=False)
     run_query('''CREATE TABLE IF NOT EXISTS admin_config (id INT PRIMARY KEY, password VARCHAR(255))''', fetch=False)
@@ -102,9 +116,8 @@ def send_sms(mobile, otp, reason):
         requests.request("POST", url, data=payload, headers=headers); return True
     except: return False
 
-# --- 6. SALARY ENGINE ---
 def calculate_salary_logic(emp_id, pay_month, pay_year, base_salary):
-    # Cycle: 5th of Previous Month -> 5th of Current Month
+    # Logic: 5th to 5th
     if pay_month == 1:
         s_date = date(pay_year - 1, 12, 5)
         e_date = date(pay_year, pay_month, 5)
@@ -114,16 +127,21 @@ def calculate_salary_logic(emp_id, pay_month, pay_year, base_salary):
         
     att_data = run_query(f"SELECT date, status FROM attendance WHERE emp_id={emp_id} AND date BETWEEN '{s_date}' AND '{e_date}'")
     
-    # Logic: Only pay Sundays if employee has worked at least 1 day in this period
-    has_worked = True if att_data and len(att_data) > 0 else False
+    # FIX: If list is empty/None, return 0 immediately (No Work = No Pay)
+    if not att_data or isinstance(att_data, str): 
+        return 0.0, 0.0, []
         
-    days = 0; report = []; att_dict = {str(r[0]): r[1] for r in att_data} if att_data else {}
+    days = 0; report = []; att_dict = {str(r[0]): r[1] for r in att_data}
+    
+    # Check if they worked at all this month
+    has_worked = len(att_data) > 0
+
     curr = s_date
     while curr <= e_date:
         stat = att_dict.get(str(curr), "Absent")
         cred = 1.0 if stat == 'Present' else (0.5 if stat == 'Half Day' else 0.0)
         
-        # Paid Sunday Logic
+        # Only pay for Sunday if they actually worked this month
         if curr.strftime("%A") == 'Sunday':
             cred = 1.0 if has_worked else 0.0
         
@@ -208,7 +226,8 @@ elif st.session_state.nav == 'Admin':
             pwd = st.text_input("Password", type="password")
             if st.button("Login"):
                 res = run_query("SELECT password FROM admin_config WHERE id=1")
-                real_pass = res[0][0] if res else "admin"
+                # Default to 'admin' if table empty
+                real_pass = res[0][0] if res and len(res) > 0 else "admin"
                 if pwd == real_pass: st.session_state.auth = True; st.rerun()
                 else: st.error("Denied")
             st.markdown("<br>", unsafe_allow_html=True)
@@ -231,43 +250,32 @@ elif st.session_state.nav == 'Admin':
 
         with menu[1]:
             st.subheader("Payroll Management")
-            
-            # --- DATE SELECTOR ---
             c1, c2 = st.columns(2)
             with c1: p_month = st.selectbox("Month", range(1,13), index=datetime.now().month-1)
             with c2: p_year = st.number_input("Year", value=datetime.now().year)
             
             emp_data = run_query("SELECT id, name, salary FROM employees")
-            
             if isinstance(emp_data, list) and emp_data:
                 df = pd.DataFrame(emp_data, columns=['id', 'name', 'salary'])
+                s_emp = st.selectbox("Staff", df['id'], format_func=lambda x: df[df['id']==x]['name'].values[0])
                 
-                # --- SINGLE SLIP ---
-                st.markdown("#### Individual Slip")
-                s_emp = st.selectbox("Select Staff", df['id'], format_func=lambda x: df[df['id']==x]['name'].values[0])
                 if st.button("Calculate Individual"):
                     base = df[df['id']==s_emp]['salary'].values[0]
                     sal, days, report = calculate_salary_logic(s_emp, p_month, p_year, base)
                     st.success(f"Payable Days: {days} | Net Salary: ₹{sal:,.0f}")
-                    out = BytesIO(); pd.DataFrame(report, columns=['Date','Day','Status','Credit']).to_excel(out, index=False)
-                    st.download_button("Download Staff Slip", out.getvalue(), "staff_slip.xlsx")
+                    if report:
+                        out = BytesIO(); pd.DataFrame(report, columns=['Date','Day','Status','Credit']).to_excel(out, index=False)
+                        st.download_button("Download Staff Slip", out.getvalue(), "staff_slip.xlsx")
                 
                 st.markdown("---")
-                
-                # --- MASTER REPORT (ALL STAFF) ---
-                st.markdown("#### Master Report (All Employees)")
                 if st.button("Download Monthly Master Data"):
                     master_data = []
                     for index, row in df.iterrows():
-                        eid = row['id']
-                        ename = row['name']
-                        esal = row['salary']
+                        eid = row['id']; ename = row['name']; esal = row['salary']
                         net_sal, work_days, _ = calculate_salary_logic(eid, p_month, p_year, esal)
                         master_data.append([ename, esal, work_days, net_sal])
-                    
                     m_df = pd.DataFrame(master_data, columns=['Name', 'Base Salary', 'Days Worked', 'Net Pay'])
-                    m_out = BytesIO()
-                    m_df.to_excel(m_out, index=False)
+                    m_out = BytesIO(); m_df.to_excel(m_out, index=False)
                     st.download_button("📥 DOWNLOAD FULL EXCEL", m_out.getvalue(), f"Master_Report_{p_month}_{p_year}.xlsx")
 
         with menu[2]:
