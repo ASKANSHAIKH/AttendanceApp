@@ -113,7 +113,7 @@ with col2:
                 if not lat or not photo: st.error("GPS & Photo Required!")
                 else:
                     res = run_query(f"SELECT pin FROM employees WHERE id={emp_id}")
-                    real_pin = res[0][0] if res else "0000"
+                    real_pin = res[0][0] if res and len(res) > 0 else "0000"
                     if pin == real_pin:
                         addr = get_address(lat, lon)
                         mark_attendance(emp_id, photo.getvalue(), str(lat), str(lon), addr)
