@@ -15,7 +15,7 @@ st.set_page_config(page_title="National Air Condition", layout="wide", page_icon
 
 ADMIN_MOBILE = "9978815870"
 
-# --- 2. CSS STYLING ---
+# --- 2. PROFESSIONAL STYLING ---
 def apply_styling():
     st.markdown("""
         <style>
@@ -61,7 +61,6 @@ def apply_styling():
 # --- 3. DATABASE ENGINE (CACHED FOR SPEED) ---
 @st.cache_resource(ttl=3600)
 def get_db_connection():
-    # Only connects ONCE per hour, preventing crashes
     if "connections" in st.secrets and "tidb" in st.secrets["connections"]:
         creds = st.secrets["connections"]["tidb"]
         return mysql.connector.connect(
@@ -73,26 +72,16 @@ def get_db_connection():
 def run_query(query, params=None, fetch=True):
     try:
         conn = get_db_connection()
-        # Auto-reconnect if connection died
-        if not conn or not conn.is_connected():
-            st.cache_resource.clear()
-            conn = get_db_connection()
-        
+        if not conn or not conn.is_connected(): st.cache_resource.clear(); conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(query, params or ())
-        
-        if fetch:
-            result = cursor.fetchall()
-            return result
-        else:
-            conn.commit()
-            return True
+        if fetch: return cursor.fetchall()
+        else: conn.commit(); return True
     except Exception as e:
         return str(e)
 
 # --- 4. AUTO-REPAIR INITIALIZATION ---
 def init_app():
-    # Runs automatically to fix "Table doesn't exist" errors
     run_query('''CREATE TABLE IF NOT EXISTS employees (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255), designation VARCHAR(255), salary DOUBLE, pin VARCHAR(10), photo LONGBLOB)''', fetch=False)
     run_query('''CREATE TABLE IF NOT EXISTS attendance (id INT AUTO_INCREMENT PRIMARY KEY, emp_id INT, date DATE, time_in VARCHAR(20), status VARCHAR(50), punch_photo LONGBLOB, latitude VARCHAR(50), longitude VARCHAR(50), address TEXT, UNIQUE KEY unique_att (emp_id, date))''', fetch=False)
     run_query('''CREATE TABLE IF NOT EXISTS admin_config (id INT PRIMARY KEY, password VARCHAR(255))''', fetch=False)
@@ -194,7 +183,7 @@ if st.session_state.nav == 'Technician':
                     if not lat or not photo: st.error("GPS & Photo Required!")
                     else:
                         res = run_query(f"SELECT pin FROM employees WHERE id={emp_id}")
-                        real_pin = res[0][0] if res else "0000"
+                        real_pin = res[0][0] if res and len(res) > 0 else "0000"
                         if pin == real_pin:
                             addr = get_address(lat, lon); ist = get_ist_time()
                             status = "Half Day" if ist.time() > time(10,30) else "Present"
@@ -267,7 +256,7 @@ elif st.session_state.nav == 'Admin':
                     if report:
                         out = BytesIO(); pd.DataFrame(report, columns=['Date','Day','Status','Credit']).to_excel(out, index=False)
                         st.download_button("Download Staff Slip", out.getvalue(), "staff_slip.xlsx")
-                
+                    
                 st.markdown("---")
                 if st.button("Download Monthly Master Data"):
                     master_data = []
