@@ -98,6 +98,7 @@ def get_address_from_coords(lat, lon):
     except: return "Loc Unavailable"
 
 def send_sms(mobile, otp, reason):
+    # This tries to send SMS, but we will also print it on screen as fallback
     try:
         if "SMS_API_KEY" not in st.secrets: return False
         url = "https://www.fast2sms.com/dev/bulkV2"
@@ -130,11 +131,7 @@ if st.sidebar.button("👮 Admin Panel"): st.session_state.nav = 'Admin'
 if st.session_state.nav == 'Technician':
     col1, col2, col3 = st.columns([1,2,1])
     with col2:
-        # --- LOGO ADDED HERE ---
-        if os.path.exists("logo.png"): 
-            st.image("logo.png", use_container_width=True)
-        # -----------------------
-        
+        if os.path.exists("logo.png"): st.image("logo.png", use_container_width=True)
         st.markdown(f"<h3 style='text-align:center;'>Daily Attendance</h3>", unsafe_allow_html=True)
         st.markdown(f"<p style='text-align:center;'>{get_ist_time().strftime('%d %b %Y | %I:%M %p')}</p>", unsafe_allow_html=True)
         
@@ -166,12 +163,25 @@ if st.session_state.nav == 'Technician':
                             else: st.error("Already Marked!")
                         else: st.error("Wrong PIN")
             with tab2:
-                if st.button("Get OTP"): otp = random.randint(1000, 9999); st.session_state.otp = otp; send_sms(ADMIN_MOBILE, otp, "PIN Reset"); st.info("Sent!")
+                if st.button("Get OTP"): 
+                    otp = random.randint(1000, 9999); st.session_state.otp = otp
+                    send_sms(ADMIN_MOBILE, otp, "PIN Reset")
+                    # FAILSAFE: SHOW OTP ON SCREEN SO YOU ARE NEVER STUCK
+                    st.success(f"OTP Sent! (Backup Code: {otp})") 
+                
                 if 'otp' in st.session_state:
-                    u_otp = st.text_input("OTP"); n_pin = st.text_input("New PIN", max_chars=4)
-                    if st.button("Update"):
-                        if u_otp == str(st.session_state.otp): run_query(f"UPDATE employees SET pin='{n_pin}' WHERE id={emp_id}", fetch=False); st.success("Updated!")
+                    u_otp = st.text_input("Enter OTP"); n_pin = st.text_input("New PIN", max_chars=4)
+                    if st.button("Update PIN"):
+                        if u_otp == str(st.session_state.otp): run_query(f"UPDATE employees SET pin='{n_pin}' WHERE id={emp_id}", fetch=False); st.success("Updated!"); del st.session_state.otp
                         else: st.error("Invalid OTP")
+            
+            # ADMIN BACKUP LOGIN BUTTON (For Mobile)
+            st.markdown("<br><hr><br>", unsafe_allow_html=True)
+            if st.button("👮 Admin Login"):
+                st.session_state.nav = 'Admin'
+                st.rerun()
+                
+        else: st.info("No Staff Found. Login as Admin to add.")
 
 # --- 7. ADMIN PANEL ---
 elif st.session_state.nav == 'Admin':
@@ -182,14 +192,32 @@ elif st.session_state.nav == 'Admin':
         with col2:
             st.markdown("<br><div class='dashboard-card'><h3 style='text-align:center'>Admin Login</h3></div>", unsafe_allow_html=True)
             pwd = st.text_input("Password", type="password")
+            
             if st.button("Login"):
                 if pwd == run_query("SELECT password FROM admin_config WHERE id=1")[0][0]: st.session_state.auth = True; st.rerun()
                 else: st.error("Denied")
+                
+            st.markdown("---")
+            if st.button("Forgot Password?"): 
+                otp = random.randint(1000, 9999); st.session_state.aotp = otp
+                send_sms(ADMIN_MOBILE, otp, "Admin Reset")
+                # FAILSAFE: SHOW OTP ON SCREEN
+                st.success(f"OTP Sent! (Backup Code: {otp})")
+            
+            if 'aotp' in st.session_state:
+                otp_in = st.text_input("Enter OTP"); np = st.text_input("New Password")
+                if st.button("Reset Password"):
+                    if otp_in == str(st.session_state.aotp): run_query(f"UPDATE admin_config SET password='{np}' WHERE id=1", fetch=False); st.success("Updated!"); del st.session_state.aotp; st.rerun()
+            
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("⬅️ Back to Technician"):
+                st.session_state.nav = 'Technician'; st.rerun()
+
     else:
         st.title("Admin Dashboard")
         if st.sidebar.button("Logout"): st.session_state.auth = False; st.rerun()
         
-        menu = st.tabs(["Live Status", "Payroll", "Staff Mgmt", "Settings"])
+        menu = st.tabs(["Live Status", "Payroll", "Staff Mgmt"])
         
         with menu[0]:
             dt = get_ist_time().date()
@@ -212,11 +240,10 @@ elif st.session_state.nav == 'Admin':
             else: st.info("No attendance yet.")
 
         with menu[1]:
-            st.subheader("Salary Calculator")
             emp_data = run_query("SELECT id, name, salary FROM employees")
             if emp_data:
                 df = pd.DataFrame(emp_data, columns=['id', 'name', 'salary'])
-                s_emp = st.selectbox("Select Staff", df['id'], format_func=lambda x: df[df['id']==x]['name'].values[0])
+                s_emp = st.selectbox("Staff", df['id'], format_func=lambda x: df[df['id']==x]['name'].values[0])
                 if st.button("Generate Slip"):
                     s_date = date(datetime.now().year, datetime.now().month-1, 5)
                     e_date = date(datetime.now().year, datetime.now().month, 5)
@@ -241,12 +268,5 @@ elif st.session_state.nav == 'Admin':
             with c2:
                 del_id = st.selectbox("Delete", df['id'], format_func=lambda x: df[df['id']==x]['name'].values[0], key='del')
                 if st.button("Delete"): run_query(f"DELETE FROM attendance WHERE emp_id={del_id}", fetch=False); run_query(f"DELETE FROM employees WHERE id={del_id}", fetch=False); st.rerun()
-
-        with menu[3]:
-            if st.button("Send OTP"): st.session_state.aotp = random.randint(1000,9999); send_sms(ADMIN_MOBILE, st.session_state.aotp, "Admin Reset")
-            if 'aotp' in st.session_state:
-                otp_in = st.text_input("OTP"); np = st.text_input("New Pass")
-                if st.button("Save"):
-                    if otp_in == str(st.session_state.aotp): run_query(f"UPDATE admin_config SET password='{np}' WHERE id=1", fetch=False); st.success("Done")
 
 st.markdown("<div class='footer'>© National Air Condition | Developed by <b>Askan Shaikh</b></div>", unsafe_allow_html=True)
