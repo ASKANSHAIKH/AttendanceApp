@@ -9,6 +9,7 @@ from streamlit_js_eval import get_geolocation
 from geopy.geocoders import Nominatim
 
 # --- 1. CONFIGURATION ---
+# We keep the small browser tab icon, but remove the big images
 page_icon = "logo.png" if os.path.exists("logo.png") else "❄️"
 st.set_page_config(page_title="National Air Condition", layout="wide", page_icon=page_icon)
 
@@ -98,7 +99,6 @@ def get_address_from_coords(lat, lon):
     except: return "Loc Unavailable"
 
 def send_sms(mobile, otp, reason):
-    # This tries to send SMS, but we will also print it on screen as fallback
     try:
         if "SMS_API_KEY" not in st.secrets: return False
         url = "https://www.fast2sms.com/dev/bulkV2"
@@ -117,7 +117,7 @@ def init_app():
 init_app()
 
 # --- 5. UI LAYOUT & SIDEBAR ---
-if os.path.exists("logo.png"): st.sidebar.image("logo.png", width=200)
+# NO LOGO IN SIDEBAR
 st.sidebar.title("MENU")
 
 theme = st.sidebar.select_slider("Theme Mode", options=["Light", "Dark"])
@@ -131,7 +131,7 @@ if st.sidebar.button("👮 Admin Panel"): st.session_state.nav = 'Admin'
 if st.session_state.nav == 'Technician':
     col1, col2, col3 = st.columns([1,2,1])
     with col2:
-        if os.path.exists("logo.png"): st.image("logo.png", use_container_width=True)
+        # NO LOGO HERE
         st.markdown(f"<h3 style='text-align:center;'>Daily Attendance</h3>", unsafe_allow_html=True)
         st.markdown(f"<p style='text-align:center;'>{get_ist_time().strftime('%d %b %Y | %I:%M %p')}</p>", unsafe_allow_html=True)
         
@@ -164,15 +164,12 @@ if st.session_state.nav == 'Technician':
                         else: st.error("Wrong PIN")
             with tab2:
                 if st.button("Get OTP"): 
-                    otp = random.randint(1000, 9999); st.session_state.otp = otp
-                    send_sms(ADMIN_MOBILE, otp, "PIN Reset")
-                    # FAILSAFE: SHOW OTP ON SCREEN SO YOU ARE NEVER STUCK
-                    st.success(f"OTP Sent! (Backup Code: {otp})") 
-                
+                    otp = random.randint(1000, 9999); st.session_state.otp = otp; send_sms(ADMIN_MOBILE, otp, "PIN Reset")
+                    st.success(f"OTP Sent! (Backup: {otp})")
                 if 'otp' in st.session_state:
-                    u_otp = st.text_input("Enter OTP"); n_pin = st.text_input("New PIN", max_chars=4)
-                    if st.button("Update PIN"):
-                        if u_otp == str(st.session_state.otp): run_query(f"UPDATE employees SET pin='{n_pin}' WHERE id={emp_id}", fetch=False); st.success("Updated!"); del st.session_state.otp
+                    u_otp = st.text_input("OTP"); n_pin = st.text_input("New PIN", max_chars=4)
+                    if st.button("Update"):
+                        if u_otp == str(st.session_state.otp): run_query(f"UPDATE employees SET pin='{n_pin}' WHERE id={emp_id}", fetch=False); st.success("Updated!")
                         else: st.error("Invalid OTP")
             
             # ADMIN BACKUP LOGIN BUTTON (For Mobile)
@@ -201,8 +198,7 @@ elif st.session_state.nav == 'Admin':
             if st.button("Forgot Password?"): 
                 otp = random.randint(1000, 9999); st.session_state.aotp = otp
                 send_sms(ADMIN_MOBILE, otp, "Admin Reset")
-                # FAILSAFE: SHOW OTP ON SCREEN
-                st.success(f"OTP Sent! (Backup Code: {otp})")
+                st.success(f"OTP Sent! (Backup: {otp})")
             
             if 'aotp' in st.session_state:
                 otp_in = st.text_input("Enter OTP"); np = st.text_input("New Password")
@@ -240,10 +236,11 @@ elif st.session_state.nav == 'Admin':
             else: st.info("No attendance yet.")
 
         with menu[1]:
+            st.subheader("Salary Calculator")
             emp_data = run_query("SELECT id, name, salary FROM employees")
             if emp_data:
                 df = pd.DataFrame(emp_data, columns=['id', 'name', 'salary'])
-                s_emp = st.selectbox("Staff", df['id'], format_func=lambda x: df[df['id']==x]['name'].values[0])
+                s_emp = st.selectbox("Select Staff", df['id'], format_func=lambda x: df[df['id']==x]['name'].values[0])
                 if st.button("Generate Slip"):
                     s_date = date(datetime.now().year, datetime.now().month-1, 5)
                     e_date = date(datetime.now().year, datetime.now().month, 5)
