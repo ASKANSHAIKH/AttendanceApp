@@ -80,9 +80,10 @@ def run_query(query, params=None, fetch=True):
 
 # --- 4. AUTO-REPAIR INITIALIZATION ---
 def init_app():
-    # Ensures all necessary tables exist
-    run_query('''CREATE TABLE IF NOT EXISTS employees (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255), designation VARCHAR(255), salary DOUBLE, pin VARCHAR(10), photo LONGBLOB)''', fetch=False)
-    run_query('''CREATE TABLE IF NOT EXISTS attendance (id INT AUTO_INCREMENT PRIMARY KEY, emp_id INT, date DATE, time_in VARCHAR(20), status VARCHAR(50), punch_photo LONGBLOB, latitude VARCHAR(50), longitude VARCHAR(50), address TEXT, UNIQUE KEY unique_att (emp_id, date))''', fetch=False)
+    # NOTE: The columns 'photo' and 'punch_photo' were removed from the CREATE TABLE commands 
+    # to align with the SQL DROP commands, ensuring stability for new deployments.
+    run_query('''CREATE TABLE IF NOT EXISTS employees (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255), designation VARCHAR(255), salary DOUBLE, pin VARCHAR(10))''', fetch=False)
+    run_query('''CREATE TABLE IF NOT EXISTS attendance (id INT AUTO_INCREMENT PRIMARY KEY, emp_id INT, date DATE, time_in VARCHAR(20), status VARCHAR(50), latitude VARCHAR(50), longitude VARCHAR(50), address TEXT, UNIQUE KEY unique_att (emp_id, date))''', fetch=False)
     run_query('''CREATE TABLE IF NOT EXISTS admin_config (id INT PRIMARY KEY, password VARCHAR(255))''', fetch=False)
     run_query("INSERT IGNORE INTO admin_config (id, password) VALUES (1, 'admin')", fetch=False)
 
@@ -120,19 +121,17 @@ def calculate_salary_logic(emp_id, pay_month, pay_year, base_salary):
         return 0.0, 0.0, []
         
     days = 0; report = []; att_dict = {str(r[0]): r[1] for r in att_data}
-    has_worked = len(att_data) > 0 # Check if they punched in at least once
+    has_worked = len(att_data) > 0
 
     curr = s_date
     while curr <= e_date:
         stat = att_dict.get(str(curr), "Absent")
         cred = 1.0 if stat == 'Present' else (0.5 if stat == 'Half Day' else 0.0)
         
-        # Paid Sunday Logic: Only pay if they worked at least once
         if curr.strftime("%A") == 'Sunday':
             cred = 1.0 if has_worked else 0.0
         
         days += cred
-        # Date is kept as datetime object for clean export
         report.append([curr, curr.strftime("%A"), stat, cred])
         curr += timedelta(days=1)
         
@@ -211,9 +210,8 @@ elif st.session_state.nav == 'Technician - Punch':
             p = df[df['id']==emp_id].iloc[0]
             st.markdown(f"<div class='dashboard-card' style='text-align:center;'><h2>{p['name']}</h2><p>{p['desig']}</p></div>", unsafe_allow_html=True)
             
-            tab1, tab2 = st.tabs(["📸 Punch In", "🔑 Reset PIN Request"])
+            tab1, tab2 = st.tabs(["Punch In", "🔑 Reset PIN Request"])
             with tab1:
-                # --- PHOTO FEATURE REMOVED FOR STABILITY ---
                 st.info("Live Photo disabled for app stability.")
                 
                 pin = st.text_input("Enter PIN", type="password", max_chars=4)
@@ -225,14 +223,14 @@ elif st.session_state.nav == 'Technician - Punch':
                         if pin == real_pin:
                             addr = get_address(lat, lon); ist = get_ist_time()
                             status = "Half Day" if ist.time() > time(10,30) else "Present"
-                            # Store empty bytes instead of photo data
-                            res = run_query("INSERT INTO attendance (emp_id, date, time_in, status, punch_photo, latitude, longitude, address) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)", (emp_id, ist.date(), ist.time().strftime("%H:%M"), status, b'', str(lat), str(lon), addr), fetch=False)
+                            # Photo column removed, so query simplified
+                            res = run_query("INSERT INTO attendance (emp_id, date, time_in, status, latitude, longitude, address) VALUES (%s, %s, %s, %s, %s, %s, %s)", (emp_id, ist.date(), ist.time().strftime("%H:%M"), status, str(lat), str(lon), addr), fetch=False)
                             if res == True: st.balloons(); st.success("Marked!")
                             else: st.error("Already Marked!")
                         else: st.error("Wrong PIN")
             with tab2:
                 if st.button("Request PIN Reset"): 
-                    st.session_state.reset_emp_id = emp_id # Store who requested it
+                    st.session_state.reset_emp_id = emp_id
                     otp = random.randint(1000, 9999); st.session_state.otp = otp
                     send_sms(ADMIN_MOBILE, otp, f"PIN Reset for {p['name']}")
                     st.success(f"Request sent! Ask your Admin for the OTP. (Backup Code: {otp})")
@@ -283,14 +281,14 @@ elif st.session_state.nav == 'Admin - Live' and st.session_state.auth:
     st.title("Admin Dashboard: Live Status")
     
     dt = get_ist_time().date()
-    # Note: punch_photo is still selected but not displayed
-    data = run_query(f"SELECT e.name, a.time_in, a.status, a.address, a.punch_photo FROM attendance a JOIN employees e ON a.emp_id=e.id WHERE a.date='{dt}'")
+    # Removed punch_photo from SELECT query
+    data = run_query(f"SELECT e.name, a.time_in, a.status, a.address FROM attendance a JOIN employees e ON a.emp_id=e.id WHERE a.date='{dt}'")
     st.metric("Present Today", len(data) if isinstance(data, list) else 0)
     
     if isinstance(data, list) and data:
         for row in data:
             st.markdown(f"<div class='att-item'><h3>{row[0]}</h3><p>🕒 {row[1]} | {row[2]}</p><small>📍 {row[3]}</small></div>", unsafe_allow_html=True)
-            # st.image(row[4], width=100) <--- PHOTO DISPLAY REMOVED HERE
+            # Photo display removed
     else: st.info("No attendance yet.")
 
 # --------------------------------------------------------------------------------------------------
@@ -327,7 +325,6 @@ elif st.session_state.nav == 'Admin - Payroll' and st.session_state.auth:
             sal, days, report = calculate_salary_logic(s_emp, p_month, p_year, base)
             st.success(f"Payable Days: {days} | Net Salary: ₹{sal:,.0f}")
             if report:
-                # FIX: Convert the date column to Indian format string before exporting
                 df_report = pd.DataFrame(report, columns=['Date', 'Day', 'Status', 'Credit'])
                 df_report['Date'] = df_report['Date'].dt.strftime('%Y-%m-%d')
                 
@@ -362,7 +359,10 @@ elif st.session_state.nav == 'Admin - Staff' and st.session_state.auth:
         with st.form("add"):
             n = st.text_input("Name"); d = st.text_input("Role"); s = st.number_input("Salary", step=500.0); p = st.text_input("PIN")
             if st.form_submit_button("Add New Staff"): 
-                run_query("INSERT INTO employees (name, designation, salary, pin, photo) VALUES (%s, %s, %s, %s, %s)", (n,d,s,p,b''), fetch=False); st.success("Added")
+                # Photo column removed from INSERT query
+                res = run_query("INSERT INTO employees (name, designation, salary, pin) VALUES (%s, %s, %s, %s)", (n,d,s,p), fetch=False)
+                if res == True: st.success("Added")
+                else: st.error(f"Error adding staff: {res}")
     with c2:
         st.subheader("Delete Staff")
         if isinstance(emp_data, list) and emp_data:
