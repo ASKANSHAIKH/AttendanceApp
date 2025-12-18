@@ -80,8 +80,7 @@ def run_query(query, params=None, fetch=True):
 
 # --- 4. AUTO-REPAIR INITIALIZATION ---
 def init_app():
-    # NOTE: The columns 'photo' and 'punch_photo' were removed from the CREATE TABLE commands 
-    # to align with the SQL DROP commands, ensuring stability for new deployments.
+    # Ensures all necessary tables exist without photo columns
     run_query('''CREATE TABLE IF NOT EXISTS employees (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255), designation VARCHAR(255), salary DOUBLE, pin VARCHAR(10))''', fetch=False)
     run_query('''CREATE TABLE IF NOT EXISTS attendance (id INT AUTO_INCREMENT PRIMARY KEY, emp_id INT, date DATE, time_in VARCHAR(20), status VARCHAR(50), latitude VARCHAR(50), longitude VARCHAR(50), address TEXT, UNIQUE KEY unique_att (emp_id, date))''', fetch=False)
     run_query('''CREATE TABLE IF NOT EXISTS admin_config (id INT PRIMARY KEY, password VARCHAR(255))''', fetch=False)
@@ -190,8 +189,9 @@ if st.session_state.nav == 'Role Select':
 # 2. TECHNICIAN ZONE (Punch In and PIN Reset)
 # --------------------------------------------------------------------------------------------------
 elif st.session_state.nav == 'Technician - Punch':
-    # --- AUTO-REFRESH LOGIC (240 seconds = 4 minutes) ---
-    streamlit_js_eval(js_expressions='window.location.reload()', key='refresh_inactivity', timeout=240)
+    # --- AUTO-REFRESH LOGIC (300,000ms = 5 minutes) ---
+    # This prevents the app from disconnecting/getting stuck during idle times
+    streamlit_js_eval(js_expressions='setTimeout(() => window.location.reload(), 300000)', key='keep_alive')
     
     col1, col2, col3 = st.columns([1,2,1])
     with col2:
@@ -212,7 +212,7 @@ elif st.session_state.nav == 'Technician - Punch':
             
             tab1, tab2 = st.tabs(["Punch In", "🔑 Reset PIN Request"])
             with tab1:
-                st.info("Live Photo disabled for app stability.")
+                # Removed 'Live Photo disabled' message for cleaner UI
                 
                 pin = st.text_input("Enter PIN", type="password", max_chars=4)
                 if st.button("PUNCH IN"):
@@ -288,7 +288,6 @@ elif st.session_state.nav == 'Admin - Live' and st.session_state.auth:
     if isinstance(data, list) and data:
         for row in data:
             st.markdown(f"<div class='att-item'><h3>{row[0]}</h3><p>🕒 {row[1]} | {row[2]}</p><small>📍 {row[3]}</small></div>", unsafe_allow_html=True)
-            # Photo display removed
     else: st.info("No attendance yet.")
 
 # --------------------------------------------------------------------------------------------------
