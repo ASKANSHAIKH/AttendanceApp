@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, time, timedelta, date
+from datetime import datetime, time, timedelta, date, timezone
 import mysql.connector
 from io import BytesIO
 import os
@@ -87,7 +87,9 @@ def init_app():
     run_query("INSERT IGNORE INTO admin_config (id, password) VALUES (1, 'admin')", fetch=False)
 
 # --- 5. UTILS ---
-def get_ist_time(): return datetime.utcnow() + timedelta(hours=5, minutes=30)
+def get_ist_time():
+    # Fixed DeprecationWarning by using timezone.utc
+    return datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=5, minutes=30)
 
 def get_address(lat, lon):
     try:
@@ -148,19 +150,25 @@ st.sidebar.title("MENU")
 if 'nav' not in st.session_state: st.session_state.nav = 'Role Select'
 if 'auth' not in st.session_state: st.session_state.auth = False
 
-# Sidebar Navigation for Admin (once logged in)
+# Sidebar Navigation with UNIQUE KEYS to prevent DuplicateElementId error
 def sidebar_nav_buttons():
     if st.session_state.auth:
         st.sidebar.markdown("---")
         st.sidebar.header("Admin Menu")
-        if st.sidebar.button("Live Status"): st.session_state.nav = 'Admin - Live'
-        if st.sidebar.button("Payroll"): st.session_state.nav = 'Admin - Payroll'
-        if st.sidebar.button("Staff Mgmt"): st.session_state.nav = 'Admin - Staff'
-        if st.sidebar.button("Maintenance"): st.session_state.nav = 'Admin - Maint'
+        # Added unique keys (key='...') to every button
+        if st.sidebar.button("Live Status", key='btn_live'): st.session_state.nav = 'Admin - Live'
+        if st.sidebar.button("Payroll", key='btn_payroll'): st.session_state.nav = 'Admin - Payroll'
+        if st.sidebar.button("Staff Mgmt", key='btn_staff'): st.session_state.nav = 'Admin - Staff'
+        if st.sidebar.button("Maintenance", key='btn_maint'): st.session_state.nav = 'Admin - Maint'
         st.sidebar.markdown("---")
-        if st.sidebar.button("Logout"): st.session_state.auth = False; st.session_state.nav = 'Role Select'
+        if st.sidebar.button("Logout", key='btn_logout'): 
+            st.session_state.auth = False
+            st.session_state.nav = 'Role Select'
+            st.rerun()
     elif st.session_state.nav != 'Role Select':
-        if st.sidebar.button("⬅️ Change Role / Back"): st.session_state.nav = 'Role Select'
+        if st.sidebar.button("⬅️ Change Role / Back", key='btn_back'): 
+            st.session_state.nav = 'Role Select'
+            st.rerun()
 
 sidebar_nav_buttons()
 
@@ -190,7 +198,6 @@ if st.session_state.nav == 'Role Select':
 # --------------------------------------------------------------------------------------------------
 elif st.session_state.nav == 'Technician - Punch':
     # --- AUTO-REFRESH LOGIC (300,000ms = 5 minutes) ---
-    # This prevents the app from disconnecting/getting stuck during idle times
     streamlit_js_eval(js_expressions='setTimeout(() => window.location.reload(), 300000)', key='keep_alive')
     
     col1, col2, col3 = st.columns([1,2,1])
@@ -212,8 +219,6 @@ elif st.session_state.nav == 'Technician - Punch':
             
             tab1, tab2 = st.tabs(["Punch In", "🔑 Reset PIN Request"])
             with tab1:
-                # Removed 'Live Photo disabled' message for cleaner UI
-                
                 pin = st.text_input("Enter PIN", type="password", max_chars=4)
                 if st.button("PUNCH IN"):
                     if not lat: st.error("GPS Location Required!")
