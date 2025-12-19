@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, time, timedelta, date, timezone
 import pymysql
+import ssl
 from io import BytesIO
 import os
 import random
@@ -10,85 +11,61 @@ from streamlit_js_eval import get_geolocation, streamlit_js_eval
 from geopy.geocoders import Nominatim
 
 # --- 1. CONFIGURATION ---
-page_icon = "logo.png" if os.path.exists("logo.png") else "❄️"
-st.set_page_config(page_title="National Air Condition Portal", layout="wide", page_icon=page_icon)
+st.set_page_config(page_title="National Air Condition Portal", layout="wide")
 
 ADMIN_MOBILE = "9978815870"
 
-# --- 2. PROFESSIONAL STYLING (FIXED FOR DARK MODE) ---
+# --- 2. PROFESSIONAL STYLING ---
 def apply_styling():
     st.markdown("""
         <style>
-        /* HIDE UNNECESSARY STREAMLIT UI */
         #MainMenu, footer, header, [data-testid="stToolbar"] {visibility: hidden;}
         .stDeployButton {display:none;}
         
-        /* FORCE MAIN BACKGROUND TO LIGHT & TEXT TO DARK */
+        /* Force light mode background and dark text */
         .stApp { background-color: #f0f2f6; margin-top: -50px; }
+        h1, h2, h3, h4, h5, h6, p, label, div, span { color: #0e3b43 !important; }
         
-        /* Force all main text to be Dark Teal (ignores Dark Mode settings) */
-        .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6, .stApp p, .stApp span, .stApp div, .stApp label {
-            color: #0e3b43 !important;
-        }
-        
-        /* SIDEBAR STYLING (Dark Background, White Text) */
-        section[data-testid="stSidebar"] { background-color: #0e3b43; }
-        section[data-testid="stSidebar"] h1, section[data-testid="stSidebar"] span, section[data-testid="stSidebar"] label, section[data-testid="stSidebar"] p { 
-            color: white !important; 
-        }
-        
-        /* INPUT FIELDS STYLING */
+        /* Input fields */
         .stTextInput input, .stNumberInput input, .stDateInput input, .stPasswordInput input {
-            background-color: white !important; 
-            color: black !important; 
-            border: 1px solid #ddd; 
-            border-radius: 8px;
+            background-color: white !important; color: black !important; border: 1px solid #ddd;
         }
-        div[data-baseweb="select"] > div { background-color: white !important; color: black !important; border-color: #ddd !important; }
-        div[data-baseweb="select"] span { color: black !important; }
         
-        /* BUTTON STYLING */
+        /* Buttons */
         .stButton>button {
             width: 100%; height: 45px; border-radius: 8px; font-weight: 600;
             background: linear-gradient(90deg, #4ba3a8 0%, #2c7a7f 100%);
-            color: white !important; border: none; box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+            color: white !important; border: none;
         }
         
-        /* CARDS */
+        /* Cards */
         .dashboard-card {
             background: white; padding: 20px; border-radius: 12px;
             box-shadow: 0 4px 15px rgba(0,0,0,0.1); border-top: 5px solid #4ba3a8; margin-bottom: 15px;
         }
-        .dashboard-card h3, .dashboard-card p, .dashboard-card h2 {
-            color: #0e3b43 !important;
-        }
-
         .att-item {
             background: white; padding: 15px; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 10px;
-        }
-        .att-item h3, .att-item p, .att-item small {
-             color: #0e3b43 !important;
-        }
-
-        .footer {
-            position: fixed; bottom: 0; left: 0; width: 100%;
-            background: white; text-align: center; padding: 10px;
-            color: #666 !important; font-size: 12px; border-top: 1px solid #ddd;
         }
         </style>
     """, unsafe_allow_html=True)
 
-# --- 3. DATABASE ENGINE (ISOLATED CONNECTIONS) ---
+# --- 3. DATABASE ENGINE (SSL FIXED) ---
 def get_db_connection():
     if "connections" in st.secrets and "tidb" in st.secrets["connections"]:
         creds = st.secrets["connections"]["tidb"]
+        
+        # TiDB Cloud requires a secure SSL context
+        ssl_ctx = ssl.create_default_context()
+        ssl_ctx.check_hostname = False
+        ssl_ctx.verify_mode = ssl.CERT_NONE
+
         return pymysql.connect(
             host=creds["DB_HOST"],
             user=creds["DB_USER"],
             password=creds["DB_PASSWORD"],
             port=creds["DB_PORT"],
             database=creds["DB_NAME"],
-            ssl={'ssl': {}}
+            ssl=ssl_ctx  # CRITICAL: Uses correct SSL handshake
         )
     return None
 
@@ -104,18 +81,24 @@ def run_query(query, params=None, fetch=True):
                 else:
                     conn.commit()
                     return True
+        else:
+            return "Connection failed: No credentials found."
     except Exception as e:
-        return str(e)
+        # CRITICAL: This will show you exactly what is wrong instead of hiding it
+        return f"Error: {str(e)}"
     finally:
         if conn:
             conn.close()
 
-# --- 4. AUTO-REPAIR INITIALIZATION ---
+# --- 4. AUTO-REPAIR ---
 def init_app():
-    run_query('''CREATE TABLE IF NOT EXISTS employees (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255), designation VARCHAR(255), salary DOUBLE, pin VARCHAR(10))''')
-    run_query('''CREATE TABLE IF NOT EXISTS attendance (id INT AUTO_INCREMENT PRIMARY KEY, emp_id INT, date DATE, time_in VARCHAR(20), status VARCHAR(50), latitude VARCHAR(50), longitude VARCHAR(50), address TEXT, UNIQUE KEY unique_att (emp_id, date))''')
-    run_query('''CREATE TABLE IF NOT EXISTS admin_config (id INT PRIMARY KEY, password VARCHAR(255))''')
-    run_query("INSERT IGNORE INTO admin_config (id, password) VALUES (1, 'admin')")
+    # Only creates tables if they are missing. Does NOT delete data.
+    err = run_query('''CREATE TABLE IF NOT EXISTS employees (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255), designation VARCHAR(255), salary DOUBLE, pin VARCHAR(10))''', fetch=False)
+    if isinstance(err, str): st.error(err) # Show DB errors on startup
+    
+    run_query('''CREATE TABLE IF NOT EXISTS attendance (id INT AUTO_INCREMENT PRIMARY KEY, emp_id INT, date DATE, time_in VARCHAR(20), status VARCHAR(50), latitude VARCHAR(50), longitude VARCHAR(50), address TEXT, UNIQUE KEY unique_att (emp_id, date))''', fetch=False)
+    run_query('''CREATE TABLE IF NOT EXISTS admin_config (id INT PRIMARY KEY, password VARCHAR(255))''', fetch=False)
+    run_query("INSERT IGNORE INTO admin_config (id, password) VALUES (1, 'admin')", fetch=False)
 
 # --- 5. UTILS ---
 def get_ist_time():
@@ -132,7 +115,7 @@ def send_sms(mobile, otp, reason):
     try:
         if "SMS_API_KEY" not in st.secrets: return False
         url = "https://www.fast2sms.com/dev/bulkV2"
-        payload = {"route": "q", "message": f"National Air Condition OTP for {reason}: {otp}", "language": "english", "flash": 0, "numbers": mobile}
+        payload = {"route": "q", "message": f"OTP for {reason}: {otp}", "language": "english", "flash": 0, "numbers": mobile}
         headers = {'authorization': st.secrets["SMS_API_KEY"], 'Content-Type': "application/x-www-form-urlencoded"}
         requests.request("POST", url, data=payload, headers=headers); return True
     except: return False
@@ -147,7 +130,11 @@ def calculate_salary_logic(emp_id, pay_month, pay_year, base_salary):
         
     att_data = run_query(f"SELECT date, status FROM attendance WHERE emp_id={emp_id} AND date BETWEEN '{s_date}' AND '{e_date}'")
     
-    if not att_data or isinstance(att_data, str): 
+    if isinstance(att_data, str): # Database Error
+        st.error(att_data)
+        return 0.0, 0.0, []
+    
+    if not att_data:
         return 0.0, 0.0, []
         
     days = 0; report = []; att_dict = {str(r[0]): r[1] for r in att_data}
@@ -178,7 +165,7 @@ st.sidebar.title("MENU")
 if 'nav' not in st.session_state: st.session_state.nav = 'Role Select'
 if 'auth' not in st.session_state: st.session_state.auth = False
 
-# SIDEBAR NAV
+# Sidebar with Unique Keys
 def sidebar_nav_buttons():
     if st.session_state.auth:
         st.sidebar.markdown("---")
@@ -199,31 +186,19 @@ def sidebar_nav_buttons():
 
 sidebar_nav_buttons()
 
-# --------------------------------------------------------------------------------------------------
-# 1. ROLE SELECTION SCREEN
-# --------------------------------------------------------------------------------------------------
+# --- 1. ROLE SELECT ---
 if st.session_state.nav == 'Role Select':
     st.title("National Air Condition Portal")
-    st.subheader("Select Role")
-    
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("<div class='dashboard-card'><h3>Technician</h3><p>Punch in for daily attendance.</p></div>", unsafe_allow_html=True)
-        if st.button("Go to PUNCH IN"):
-            st.session_state.nav = 'Technician - Punch'
-            st.rerun()
-
+        if st.button("Go to PUNCH IN"): st.session_state.nav = 'Technician - Punch'; st.rerun()
     with col2:
         st.markdown("<div class='dashboard-card'><h3>Admin</h3><p>Manage staff and payroll.</p></div>", unsafe_allow_html=True)
-        if st.button("Go to ADMIN LOGIN"):
-            st.session_state.nav = 'Admin - Login'
-            st.rerun()
+        if st.button("Go to ADMIN LOGIN"): st.session_state.nav = 'Admin - Login'; st.rerun()
 
-# --------------------------------------------------------------------------------------------------
-# 2. TECHNICIAN ZONE
-# --------------------------------------------------------------------------------------------------
+# --- 2. TECHNICIAN ZONE ---
 elif st.session_state.nav == 'Technician - Punch':
-    # Keep Alive (Refresh every 5 mins)
     streamlit_js_eval(js_expressions='setTimeout(() => window.location.reload(), 300000)', key='keep_alive')
     
     col1, col2, col3 = st.columns([1,2,1])
@@ -233,54 +208,51 @@ elif st.session_state.nav == 'Technician - Punch':
         
         loc = get_geolocation()
         if loc and 'coords' in loc:
-            lat = loc['coords']['latitude']
-            lon = loc['coords']['longitude']
+            lat = loc['coords']['latitude']; lon = loc['coords']['longitude']
             st.success("📍 GPS Active")
 
             rows = run_query("SELECT id, name, designation FROM employees")
-            if isinstance(rows, list) and rows:
+            if isinstance(rows, str): # Error Check
+                st.error(f"Database Error: {rows}")
+            elif isinstance(rows, list) and rows:
                 df = pd.DataFrame(rows, columns=['id', 'name', 'desig'])
                 emp_id = st.selectbox("Select Your Name", df['id'], format_func=lambda x: df[df['id']==x]['name'].values[0])
                 
                 p = df[df['id']==emp_id].iloc[0]
                 st.markdown(f"<div class='dashboard-card' style='text-align:center;'><h2>{p['name']}</h2><p>{p['desig']}</p></div>", unsafe_allow_html=True)
                 
-                tab1, tab2 = st.tabs(["Punch In", "🔑 Reset PIN Request"])
+                tab1, tab2 = st.tabs(["Punch In", "Reset PIN"])
                 with tab1:
                     pin = st.text_input("Enter PIN", type="password", max_chars=4)
                     if st.button("PUNCH IN"):
                         res = run_query(f"SELECT pin FROM employees WHERE id={emp_id}")
-                        real_pin = res[0][0] if res and len(res) > 0 else "0000"
-                        if pin == real_pin:
-                            addr = get_address(lat, lon); ist = get_ist_time()
-                            status = "Half Day" if ist.time() > time(10,30) else "Present"
-                            res = run_query("INSERT INTO attendance (emp_id, date, time_in, status, latitude, longitude, address) VALUES (%s, %s, %s, %s, %s, %s, %s)", (emp_id, ist.date(), ist.time().strftime("%H:%M"), status, str(lat), str(lon), addr), fetch=False)
-                            if res == True: st.balloons(); st.success("Marked!")
-                            else: st.error("Already Marked Today!")
-                        else: st.error("Wrong PIN")
+                        if isinstance(res, str): st.error(res)
+                        else:
+                            real_pin = res[0][0] if res else "0000"
+                            if pin == real_pin:
+                                addr = get_address(lat, lon); ist = get_ist_time()
+                                status = "Half Day" if ist.time() > time(10,30) else "Present"
+                                res = run_query("INSERT INTO attendance (emp_id, date, time_in, status, latitude, longitude, address) VALUES (%s, %s, %s, %s, %s, %s, %s)", (emp_id, ist.date(), ist.time().strftime("%H:%M"), status, str(lat), str(lon), addr), fetch=False)
+                                if res == True: st.balloons(); st.success("Marked!")
+                                else: st.error("Already Marked Today!")
+                            else: st.error("Wrong PIN")
                 with tab2:
-                    if st.button("Request PIN Reset"): 
+                    if st.button("Request PIN Reset"):
                         st.session_state.reset_emp_id = emp_id
                         otp = random.randint(1000, 9999); st.session_state.otp = otp
                         send_sms(ADMIN_MOBILE, otp, f"PIN Reset for {p['name']}")
-                        st.success(f"Request sent! Ask Admin for OTP: {otp}")
-                        
+                        st.success(f"Request sent! OTP: {otp}")
                     if st.session_state.get('otp', False):
-                        st.markdown("---")
-                        st.subheader("Enter OTP from Admin")
                         u_otp = st.text_input("OTP"); n_pin = st.text_input("New PIN", type='password', max_chars=4)
-                        if st.button("Finalize New PIN"):
+                        if st.button("Update PIN"):
                             if u_otp == str(st.session_state.otp): 
                                 run_query(f"UPDATE employees SET pin='{n_pin}' WHERE id={st.session_state.reset_emp_id}", fetch=False)
-                                st.success("PIN Updated!"); del st.session_state.otp; st.session_state.nav = 'Role Select'; st.rerun()
+                                st.success("Updated!"); del st.session_state.otp; st.rerun()
                             else: st.error("Invalid OTP")
-            else: st.info("No Staff Found. Login as Admin to add staff.")
-        else:
-            st.warning("Waiting for GPS... Please allow location access.")
+            else: st.info("No Staff Found or Database is empty.")
+        else: st.warning("Waiting for GPS...")
 
-# --------------------------------------------------------------------------------------------------
-# 3. ADMIN LOGIN
-# --------------------------------------------------------------------------------------------------
+# --- 3. ADMIN LOGIN ---
 elif st.session_state.nav == 'Admin - Login':
     col1, col2, col3 = st.columns([1,2,1])
     with col2:
@@ -288,129 +260,67 @@ elif st.session_state.nav == 'Admin - Login':
         pwd = st.text_input("Password", type="password")
         if st.button("Login"):
             res = run_query("SELECT password FROM admin_config WHERE id=1")
-            real_pass = res[0][0] if res and len(res) > 0 else "admin"
-            if pwd == real_pass: 
+            if isinstance(res, str): st.error(res)
+            elif pwd == (res[0][0] if res else "admin"): 
                 st.session_state.auth = True; st.session_state.nav = 'Admin - Live'; st.rerun()
             else: st.error("Access Denied")
-            
-        st.markdown("---")
-        if st.button("Forgot Password?"): 
-            otp = random.randint(1000, 9999); st.session_state.admin_otp = otp
-            send_sms(ADMIN_MOBILE, otp, "Admin Reset")
-            st.success(f"OTP Sent! Backup: {otp}")
-        
-        if 'admin_otp' in st.session_state:
-            otp_in = st.text_input("Enter OTP"); np = st.text_input("New Password", type='password')
-            if st.button("Reset Password"):
-                if otp_in == str(st.session_state.admin_otp): 
-                    run_query(f"UPDATE admin_config SET password='{np}' WHERE id=1", fetch=False); st.success("Updated!"); del st.session_state.admin_otp; st.rerun()
-                else: st.error("Invalid OTP")
 
-# --------------------------------------------------------------------------------------------------
-# 4. ADMIN DASHBOARD - LIVE STATUS
-# --------------------------------------------------------------------------------------------------
-elif st.session_state.nav == 'Admin - Live' and st.session_state.auth:
-    st.title("Admin Dashboard: Live Status")
-    dt = get_ist_time().date()
-    data = run_query(f"SELECT e.name, a.time_in, a.status, a.address FROM attendance a JOIN employees e ON a.emp_id=e.id WHERE a.date='{dt}'")
-    st.metric("Present Today", len(data) if isinstance(data, list) else 0)
-    
-    if isinstance(data, list) and data:
-        for row in data:
-            st.markdown(f"<div class='att-item'><h3>{row[0]}</h3><p>🕒 {row[1]} | {row[2]}</p><small>📍 {row[3]}</small></div>", unsafe_allow_html=True)
-    else: st.info("No attendance yet.")
+# --- 4. ADMIN DASHBOARD ---
+elif st.session_state.auth:
+    if st.session_state.nav == 'Admin - Live':
+        st.title("Live Status")
+        dt = get_ist_time().date()
+        data = run_query(f"SELECT e.name, a.time_in, a.status, a.address FROM attendance a JOIN employees e ON a.emp_id=e.id WHERE a.date='{dt}'")
+        
+        if isinstance(data, str): st.error(data) # Show DB Error
+        elif isinstance(data, list) and data:
+            st.metric("Present Today", len(data))
+            for row in data:
+                st.markdown(f"<div class='att-item'><h3>{row[0]}</h3><p>🕒 {row[1]} | {row[2]}</p><small>📍 {row[3]}</small></div>", unsafe_allow_html=True)
+        else: st.info("No attendance yet today. (Check Payroll for past records)")
 
-# --------------------------------------------------------------------------------------------------
-# 5. ADMIN DASHBOARD - PAYROLL
-# --------------------------------------------------------------------------------------------------
-elif st.session_state.nav == 'Admin - Payroll' and st.session_state.auth:
-    st.title("Admin Dashboard: Payroll")
-    c1, c2 = st.columns(2)
-    with c1: p_month = st.selectbox("Month", range(1,13), index=datetime.now().month-1)
-    with c2: p_year = st.number_input("Year", value=datetime.now().year)
-    
-    if st.session_state.get('otp', False):
-        st.warning(f"Technician OTP: **{st.session_state.otp}**")
-    
-    emp_data = run_query("SELECT id, name, salary, pin FROM employees")
-    if isinstance(emp_data, list) and emp_data:
-        df = pd.DataFrame(emp_data, columns=['id', 'name', 'salary', 'pin'])
+    elif st.session_state.nav == 'Admin - Payroll':
+        st.title("Payroll")
+        c1, c2 = st.columns(2)
+        with c1: p_month = st.selectbox("Month", range(1,13), index=datetime.now().month-1)
+        with c2: p_year = st.number_input("Year", value=datetime.now().year)
         
-        st.markdown("#### Individual Slip")
-        s_emp = st.selectbox("Select Staff", df['id'], format_func=lambda x: df[df['id']==x]['name'].values[0])
-        current_pin = df[df['id']==s_emp]['pin'].values[0]
-        st.caption(f"Current PIN: **{current_pin}**")
-        
-        if st.button("Calculate Individual"):
-            base = df[df['id']==s_emp]['salary'].values[0]
-            sal, days, report = calculate_salary_logic(s_emp, p_month, p_year, base)
-            st.success(f"Payable Days: {days} | Net Salary: ₹{sal:,.0f}")
-            if report:
-                df_report = pd.DataFrame(report, columns=['Date', 'Day', 'Status', 'Credit'])
-                df_report['Date'] = df_report['Date'].dt.strftime('%Y-%m-%d')
-                out = BytesIO(); df_report.to_excel(out, index=False)
-                st.download_button("Download Slip", out.getvalue(), "staff_slip.xlsx")
-        
-        st.markdown("---")
-        st.markdown("#### Master Report")
-        if st.button("Download Master Excel"):
-            master_data = []
-            for index, row in df.iterrows():
-                eid = row['id']; ename = row['name']; esal = row['salary']
-                net_sal, work_days, _ = calculate_salary_logic(eid, p_month, p_year, esal)
-                master_data.append([ename, esal, work_days, net_sal])
-            m_df = pd.DataFrame(master_data, columns=['Name', 'Base Salary', 'Days Worked', 'Net Pay'])
-            m_out = BytesIO(); m_df.to_excel(m_out, index=False)
-            st.download_button("📥 DOWNLOAD EXCEL", m_out.getvalue(), f"Master_Report_{p_month}_{p_year}.xlsx")
-
-# --------------------------------------------------------------------------------------------------
-# 6. ADMIN DASHBOARD - STAFF MGMT
-# --------------------------------------------------------------------------------------------------
-elif st.session_state.nav == 'Admin - Staff' and st.session_state.auth:
-    st.title("Admin Dashboard: Staff Management")
-    emp_data = run_query("SELECT id, name, designation, salary FROM employees")
-    
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("Add New Staff")
-        with st.form("add"):
-            n = st.text_input("Name"); d = st.text_input("Role"); s = st.number_input("Salary", step=500.0); p = st.text_input("PIN")
-            if st.form_submit_button("Add Staff"): 
-                res = run_query("INSERT INTO employees (name, designation, salary, pin) VALUES (%s, %s, %s, %s)", (n,d,s,p), fetch=False)
-                if res == True: st.success("Added")
-                else: st.error(f"Error: {res}")
-    with c2:
-        st.subheader("Delete Staff")
+        emp_data = run_query("SELECT id, name, salary, pin FROM employees")
         if isinstance(emp_data, list) and emp_data:
-            df = pd.DataFrame(emp_data, columns=['id', 'name', 'desig', 'salary'])
-            del_id = st.selectbox("Select Employee", df['id'], format_func=lambda x: df[df['id']==x]['name'].values[0], key='del')
-            if st.button("DELETE PERMANENTLY"): 
-                run_query(f"DELETE FROM attendance WHERE emp_id={del_id}", fetch=False)
-                run_query(f"DELETE FROM employees WHERE id={del_id}", fetch=False)
-                st.success("Deleted!"); st.rerun()
+            df = pd.DataFrame(emp_data, columns=['id', 'name', 'salary', 'pin'])
+            s_emp = st.selectbox("Staff", df['id'], format_func=lambda x: df[df['id']==x]['name'].values[0])
+            
+            if st.button("Calculate"):
+                base = df[df['id']==s_emp]['salary'].values[0]
+                sal, days, report = calculate_salary_logic(s_emp, p_month, p_year, base)
+                st.success(f"Payable Days: {days} | Net Salary: ₹{sal:,.0f}")
+                if report:
+                    df_r = pd.DataFrame(report, columns=['Date', 'Day', 'Status', 'Credit'])
+                    df_r['Date'] = df_r['Date'].dt.strftime('%Y-%m-%d')
+                    st.download_button("Download Slip", BytesIO(df_r.to_excel(index=False).encode('utf-8') if hasattr(df_r.to_excel(index=False), 'encode') else b'Error'), "slip.csv")
 
-# --------------------------------------------------------------------------------------------------
-# 7. ADMIN DASHBOARD - MAINTENANCE
-# --------------------------------------------------------------------------------------------------
-elif st.session_state.nav == 'Admin - Maint' and st.session_state.auth:
-    st.title("Admin Dashboard: Maintenance")
-    if st.button("🧹 Clear App Cache"):
-        st.cache_resource.clear()
-        st.success("Cleared!")
-        st.rerun()
+    elif st.session_state.nav == 'Admin - Staff':
+        st.title("Staff Mgmt")
+        c1, c2 = st.columns(2)
+        with c1:
+            with st.form("add"):
+                n = st.text_input("Name"); d = st.text_input("Role"); s = st.number_input("Salary", step=500.0); p = st.text_input("PIN")
+                if st.form_submit_button("Add"): 
+                    res = run_query("INSERT INTO employees (name, designation, salary, pin) VALUES (%s, %s, %s, %s)", (n,d,s,p), fetch=False)
+                    if res == True: st.success("Added")
+                    else: st.error(str(res))
+        with c2:
+            emp_data = run_query("SELECT id, name FROM employees")
+            if isinstance(emp_data, list) and emp_data:
+                del_id = st.selectbox("Delete", [x[0] for x in emp_data], format_func=lambda x: [y[1] for y in emp_data if y[0]==x][0])
+                if st.button("DELETE"): 
+                    run_query(f"DELETE FROM attendance WHERE emp_id={del_id}", fetch=False)
+                    run_query(f"DELETE FROM employees WHERE id={del_id}", fetch=False)
+                    st.rerun()
 
-    st.markdown("---")
-    if st.button("Send Reset OTP"): 
-        otp = random.randint(1000, 9999); st.session_state.admin_otp = otp
-        send_sms(ADMIN_MOBILE, otp, "Admin Reset")
-        st.success(f"OTP Sent! Backup: {otp}")
-    
-    if 'admin_otp' in st.session_state:
-        otp_in = st.text_input("Enter OTP"); np = st.text_input("New Password", type='password')
-        if st.button("Set New Password"):
-            if otp_in == str(st.session_state.admin_otp): 
-                run_query(f"UPDATE admin_config SET password='{np}' WHERE id=1", fetch=False); st.success("Updated!"); del st.session_state.admin_otp; st.rerun()
-            else: st.error("Invalid OTP")
+    elif st.session_state.nav == 'Admin - Maint':
+        st.title("Maintenance")
+        if st.button("Clear Cache"): st.cache_resource.clear(); st.rerun()
 
 else:
     st.session_state.auth = False
