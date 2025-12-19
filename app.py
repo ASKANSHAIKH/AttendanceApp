@@ -15,39 +15,70 @@ st.set_page_config(page_title="National Air Condition Portal", layout="wide", pa
 
 ADMIN_MOBILE = "9978815870"
 
-# --- 2. PROFESSIONAL STYLING ---
+# --- 2. PROFESSIONAL STYLING (FIXED FOR DARK MODE) ---
 def apply_styling():
     st.markdown("""
         <style>
+        /* HIDE UNNECESSARY STREAMLIT UI */
         #MainMenu, footer, header, [data-testid="stToolbar"] {visibility: hidden;}
         .stDeployButton {display:none;}
+        
+        /* FORCE MAIN BACKGROUND TO LIGHT & TEXT TO DARK */
         .stApp { background-color: #f0f2f6; margin-top: -50px; }
         
-        section[data-testid="stSidebar"] { background-color: #0e3b43; }
-        section[data-testid="stSidebar"] h1, section[data-testid="stSidebar"] span, section[data-testid="stSidebar"] label { color: white !important; }
-        
-        .stTextInput input, .stNumberInput input, .stDateInput input, .stPasswordInput input {
-            background-color: white !important; color: black !important; border: 1px solid #ddd; border-radius: 8px;
+        /* Force all main text to be Dark Teal (ignores Dark Mode settings) */
+        .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6, .stApp p, .stApp span, .stApp div, .stApp label {
+            color: #0e3b43 !important;
         }
         
+        /* SIDEBAR STYLING (Dark Background, White Text) */
+        section[data-testid="stSidebar"] { background-color: #0e3b43; }
+        section[data-testid="stSidebar"] h1, section[data-testid="stSidebar"] span, section[data-testid="stSidebar"] label, section[data-testid="stSidebar"] p { 
+            color: white !important; 
+        }
+        
+        /* INPUT FIELDS STYLING */
+        .stTextInput input, .stNumberInput input, .stDateInput input, .stPasswordInput input {
+            background-color: white !important; 
+            color: black !important; 
+            border: 1px solid #ddd; 
+            border-radius: 8px;
+        }
+        div[data-baseweb="select"] > div { background-color: white !important; color: black !important; border-color: #ddd !important; }
+        div[data-baseweb="select"] span { color: black !important; }
+        
+        /* BUTTON STYLING */
         .stButton>button {
             width: 100%; height: 45px; border-radius: 8px; font-weight: 600;
             background: linear-gradient(90deg, #4ba3a8 0%, #2c7a7f 100%);
             color: white !important; border: none; box-shadow: 0 4px 6px rgba(0,0,0,0.2);
         }
         
+        /* CARDS */
         .dashboard-card {
             background: white; padding: 20px; border-radius: 12px;
             box-shadow: 0 4px 15px rgba(0,0,0,0.1); border-top: 5px solid #4ba3a8; margin-bottom: 15px;
         }
+        .dashboard-card h3, .dashboard-card p, .dashboard-card h2 {
+            color: #0e3b43 !important;
+        }
+
         .att-item {
             background: white; padding: 15px; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 10px;
+        }
+        .att-item h3, .att-item p, .att-item small {
+             color: #0e3b43 !important;
+        }
+
+        .footer {
+            position: fixed; bottom: 0; left: 0; width: 100%;
+            background: white; text-align: center; padding: 10px;
+            color: #666 !important; font-size: 12px; border-top: 1px solid #ddd;
         }
         </style>
     """, unsafe_allow_html=True)
 
 # --- 3. DATABASE ENGINE (ISOLATED CONNECTIONS) ---
-# CRITICAL FIX: Caching removed to support multiple devices simultaneously.
 def get_db_connection():
     if "connections" in st.secrets and "tidb" in st.secrets["connections"]:
         creds = st.secrets["connections"]["tidb"]
@@ -57,7 +88,7 @@ def get_db_connection():
             password=creds["DB_PASSWORD"],
             port=creds["DB_PORT"],
             database=creds["DB_NAME"],
-            ssl={'ssl': {}}  # Necessary for TiDB Cloud
+            ssl={'ssl': {}}
         )
     return None
 
@@ -81,7 +112,6 @@ def run_query(query, params=None, fetch=True):
 
 # --- 4. AUTO-REPAIR INITIALIZATION ---
 def init_app():
-    # Attempt to create tables if they don't exist
     run_query('''CREATE TABLE IF NOT EXISTS employees (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255), designation VARCHAR(255), salary DOUBLE, pin VARCHAR(10))''')
     run_query('''CREATE TABLE IF NOT EXISTS attendance (id INT AUTO_INCREMENT PRIMARY KEY, emp_id INT, date DATE, time_in VARCHAR(20), status VARCHAR(50), latitude VARCHAR(50), longitude VARCHAR(50), address TEXT, UNIQUE KEY unique_att (emp_id, date))''')
     run_query('''CREATE TABLE IF NOT EXISTS admin_config (id INT PRIMARY KEY, password VARCHAR(255))''')
@@ -148,7 +178,7 @@ st.sidebar.title("MENU")
 if 'nav' not in st.session_state: st.session_state.nav = 'Role Select'
 if 'auth' not in st.session_state: st.session_state.auth = False
 
-# SIDEBAR NAV (Unique Keys to prevent DuplicateElementId error)
+# SIDEBAR NAV
 def sidebar_nav_buttons():
     if st.session_state.auth:
         st.sidebar.markdown("---")
@@ -190,7 +220,7 @@ if st.session_state.nav == 'Role Select':
             st.rerun()
 
 # --------------------------------------------------------------------------------------------------
-# 2. TECHNICIAN ZONE (Punch In and PIN Reset)
+# 2. TECHNICIAN ZONE
 # --------------------------------------------------------------------------------------------------
 elif st.session_state.nav == 'Technician - Punch':
     # Keep Alive (Refresh every 5 mins)
