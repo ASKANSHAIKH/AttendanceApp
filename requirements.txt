@@ -1,8 +1,5 @@
 streamlit
 pandas
-mysql-connector-python
-openpyxl
-streamlit-js-eval
-geopy
-requests
 pymysql
+geopy
+streamlit-js-eval
