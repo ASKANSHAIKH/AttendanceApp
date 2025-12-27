@@ -15,7 +15,7 @@ st.set_page_config(page_title="National Air Condition Portal", layout="wide")
 
 ADMIN_MOBILE = "9978815870"
 
-# --- 2. STYLING ---
+# --- 2. STYLING (Fixed for Dark Mode) ---
 def apply_styling():
     st.markdown("""
         <style>
@@ -47,7 +47,6 @@ def get_db_connection():
             ssl_ctx.check_hostname = False
             ssl_ctx.verify_mode = ssl.CERT_NONE
             
-            # Autocommit=True ensures data is saved INSTANTLY
             return pymysql.connect(
                 host=creds["DB_HOST"],
                 user=creds["DB_USER"],
@@ -58,9 +57,7 @@ def get_db_connection():
                 autocommit=True
             )
         except Exception as e:
-            st.error(f"❌ DB Connection Error: {e}")
             return None
-    st.error("❌ Secrets not found!")
     return None
 
 def run_query(query, params=None, fetch=True):
@@ -74,7 +71,7 @@ def run_query(query, params=None, fetch=True):
             else:
                 return True
     except Exception as e:
-        st.error(f"❌ Query Error: {e}")
+        st.error(f"❌ Database Error: {e}") # SHOWS ERROR ON SCREEN
         return None
     finally:
         if conn: conn.close()
@@ -129,6 +126,7 @@ def sidebar_nav():
         if st.sidebar.button("Live Status", key='l'): st.session_state.nav = 'Admin - Live'
         if st.sidebar.button("Payroll", key='p'): st.session_state.nav = 'Admin - Payroll'
         if st.sidebar.button("Staff Mgmt", key='s'): st.session_state.nav = 'Admin - Staff'
+        if st.sidebar.button("Maintenance", key='m'): st.session_state.nav = 'Admin - Maint'
         if st.sidebar.button("Logout", key='o'): st.session_state.auth = False; st.session_state.nav = 'Role Select'; st.rerun()
     elif st.session_state.nav != 'Role Select':
         if st.sidebar.button("⬅️ Back", key='b'): st.session_state.nav = 'Role Select'; st.rerun()
@@ -179,10 +177,11 @@ elif st.session_state.nav == 'Admin - Login':
         pwd = st.text_input("Password", type="password")
         if st.button("Login"):
             res = run_query("SELECT password FROM admin_config WHERE id=1")
-            # Auto-create admin if missing
+            # Auto-create admin if missing (First Run)
             if not res: 
-                run_query("INSERT IGNORE INTO admin_config (id, password) VALUES (1, 'admin')", fetch=False)
-                res = [('admin',)]
+                 run_query('''CREATE TABLE IF NOT EXISTS admin_config (id INT PRIMARY KEY, password VARCHAR(255))''', fetch=False)
+                 run_query("INSERT IGNORE INTO admin_config (id, password) VALUES (1, 'admin')", fetch=False)
+                 res = [('admin',)]
             
             if res and pwd == res[0][0]: st.session_state.auth = True; st.session_state.nav = 'Admin - Live'; st.rerun()
             else: st.error("Wrong Password")
@@ -199,17 +198,9 @@ elif st.session_state.auth:
 
     elif st.session_state.nav == 'Admin - Staff':
         st.title("Staff Management")
-        
-        # --- TEST BUTTON ---
-        if st.button("⚠️ Test Database Connection"):
-            test = run_query("SELECT 1")
-            if test: st.success("✅ Database is Connected!")
-            else: st.error("❌ Database Connection Failed.")
-            
         c1, c2 = st.columns(2)
         with c1:
             st.subheader("Add Staff")
-            # REMOVED st.form for direct feedback
             n = st.text_input("Name")
             d = st.text_input("Role")
             s = st.number_input("Salary", step=500.0)
@@ -217,27 +208,25 @@ elif st.session_state.auth:
             
             if st.button("Save New Staff"):
                 if n and p:
-                    # Auto-create table if missing
-                    run_query('''CREATE TABLE IF NOT EXISTS employees (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255), designation VARCHAR(255), salary DOUBLE, pin VARCHAR(10))''', fetch=False)
-                    
+                    # Direct Insert
                     res = run_query("INSERT INTO employees (name, designation, salary, pin) VALUES (%s, %s, %s, %s)", (n,d,s,p), fetch=False)
                     if res == True: 
                         st.success(f"✅ Saved {n}!")
-                        st.rerun() # Refresh to update list
-                    else: st.error("Failed to save.")
-                else:
-                    st.warning("Name and PIN are required.")
+                        st.rerun() 
+                    else: st.error("Failed to save. Try HARD RESET in Maintenance.")
+                else: st.warning("Name and PIN required.")
                     
         with c2:
-            st.subheader("Remove Staff")
+            st.subheader("Staff List")
             rows = run_query("SELECT id, name FROM employees")
             if isinstance(rows, list) and rows:
-                del_id = st.selectbox("Select to Delete", [r[0] for r in rows], format_func=lambda x: [r[1] for r in rows if r[0]==x][0])
-                if st.button("DELETE PERMANENTLY"): 
+                del_id = st.selectbox("Delete Staff", [r[0] for r in rows], format_func=lambda x: [r[1] for r in rows if r[0]==x][0])
+                if st.button("DELETE"): 
                     run_query(f"DELETE FROM attendance WHERE emp_id={del_id}", fetch=False)
                     run_query(f"DELETE FROM employees WHERE id={del_id}", fetch=False)
                     st.success("Deleted!")
                     st.rerun()
+            else: st.info("No staff found.")
 
     elif st.session_state.nav == 'Admin - Payroll':
         st.title("Payroll")
@@ -248,3 +237,20 @@ elif st.session_state.auth:
             if st.button("Calculate"):
                 sal, days, report = calculate_salary_logic(s_emp, datetime.now().month-1, datetime.now().year, df[df['id']==s_emp]['salary'].values[0])
                 st.success(f"Days: {days} | Pay: ₹{sal:,.0f}")
+    
+    elif st.session_state.nav == 'Admin - Maint':
+        st.title("Maintenance")
+        st.error("Only use this if 'Staff List is Empty' error persists.")
+        if st.button("⚠️ HARD RESET DATABASE (Fixes Empty List)"):
+            run_query("DROP TABLE IF EXISTS employees", fetch=False)
+            run_query("DROP TABLE IF EXISTS attendance", fetch=False)
+            run_query('''CREATE TABLE employees (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255), designation VARCHAR(255), salary DOUBLE, pin VARCHAR(10))''', fetch=False)
+            run_query('''CREATE TABLE attendance (id INT AUTO_INCREMENT PRIMARY KEY, emp_id INT, date DATE, time_in VARCHAR(20), status VARCHAR(50), latitude VARCHAR(50), longitude VARCHAR(50), address TEXT, UNIQUE KEY unique_att (emp_id, date))''', fetch=False)
+            st.success("Database Reset Successfully! Go to Staff Mgmt and Add Staff now.")
+
+else:
+    st.session_state.auth = False
+    st.session_state.nav = 'Role Select'
+    st.rerun()
+
+st.markdown("<div class='footer'>© National Air Condition | Developed by <b>Askan Shaikh</b></div>", unsafe_allow_html=True)
