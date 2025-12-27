@@ -9,7 +9,7 @@ from geopy.geocoders import Nominatim
 # --- 1. CONFIGURATION ---
 st.set_page_config(page_title="National Air Condition Portal", layout="wide", page_icon="🔧")
 
-# --- 2. DATABASE ENGINE (DIAGNOSTIC) ---
+# --- 2. DATABASE ENGINE ---
 def get_db_connection():
     if "connections" in st.secrets and "tidb" in st.secrets["connections"]:
         creds = st.secrets["connections"]["tidb"]
@@ -28,14 +28,12 @@ def get_db_connection():
                 autocommit=True
             )
         except Exception as e:
-            st.error(f"❌ Connection Failed: {e}")
             return None
-    st.error("❌ Secrets missing")
     return None
 
 def run_query(query, params=None, fetch=True):
     conn = get_db_connection()
-    if not conn: return None
+    if not conn: return "Connection Failed"
     try:
         with conn.cursor() as cursor:
             cursor.execute(query, params or ())
@@ -58,7 +56,7 @@ def get_address(lat, lon):
 if 'nav' not in st.session_state: st.session_state.nav = 'Technician'
 
 # --- STYLE OVERRIDE ---
-st.markdown("""<style>.stApp { background-color: white; } h1,h2,p,div { color: black !important; }</style>""", unsafe_allow_html=True)
+st.markdown("""<style>.stApp { background-color: white; } h1,h2,p,div,span { color: black !important; }</style>""", unsafe_allow_html=True)
 
 # --- NAVIGATION ---
 st.title("National Air Condition Portal")
@@ -69,40 +67,31 @@ if col2.button("Admin Zone"): st.session_state.nav = 'Admin'
 st.markdown("---")
 
 # ==========================================
-# TECHNICIAN ZONE (DIAGNOSTIC MODE)
+# TECHNICIAN ZONE
 # ==========================================
 if st.session_state.nav == 'Technician':
     st.header("Technician Punch-In")
     
-    # 1. FORCE TABLE CREATION (Just in case)
-    run_query('''CREATE TABLE IF NOT EXISTS employees (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255), designation VARCHAR(255), salary DOUBLE, pin VARCHAR(10))''', fetch=False)
-    run_query('''CREATE TABLE IF NOT EXISTS attendance (id INT AUTO_INCREMENT PRIMARY KEY, emp_id INT, date DATE, time_in VARCHAR(20), status VARCHAR(50), latitude VARCHAR(50), longitude VARCHAR(50), address TEXT, UNIQUE KEY unique_att (emp_id, date))''', fetch=False)
-
-    # 2. FETCH DATA
+    # 1. ATTEMPT TO FETCH DATA
     rows = run_query("SELECT id, name FROM employees")
     
-    # 3. SHOW DIAGNOSTIC INFO
-    st.info(f"📊 Database Status: Connected | Staff Count: {len(rows) if isinstance(rows, list) else 0}")
+    # 2. HANDLE ERRORS SAFELY
+    if isinstance(rows, str): 
+        # If database returns an error string (like "Table doesn't exist"), show it safely
+        st.error(f"⚠️ System Error: {rows}")
+        st.info("Please ask Admin to log in once to auto-fix this.")
+        rows = [] # Set empty list to prevent crash
     
-    # 4. IF EMPTY, ALLOW QUICK ADD
-    if not rows or (isinstance(rows, list) and len(rows) == 0):
-        st.warning("⚠️ Staff List is Empty!")
-        with st.expander("➕ Quick Add Staff (Emergency)", expanded=True):
-            n = st.text_input("Name (e.g., Rahul)")
-            p = st.text_input("PIN (e.g., 1234)")
-            if st.button("Add Now"):
-                run_query("INSERT INTO employees (name, designation, salary, pin) VALUES (%s, 'Tech', 15000, %s)", (n, p), fetch=False)
-                st.success("Added! Please wait...")
-                st.rerun()
+    # 3. DIAGNOSTIC INFO
+    st.caption(f"Database Connection Status: {'✅ Connected' if isinstance(rows, list) or isinstance(rows, tuple) else '❌ Error'}")
     
-    # 5. ALWAYS SHOW DROPDOWN (Even if empty)
-    options = rows if isinstance(rows, list) else []
+    # 4. SHOW DROPDOWN
+    options = rows if (isinstance(rows, list) or isinstance(rows, tuple)) else []
     
     if options:
         emp_id = st.selectbox("Select Your Name", [r[0] for r in options], format_func=lambda x: [r[1] for r in options if r[0]==x][0])
         pin_in = st.text_input("Enter PIN", type="password")
         
-        # GPS Check
         loc = get_geolocation()
         if loc and 'coords' in loc:
             st.success("✅ GPS Active")
@@ -115,7 +104,16 @@ if st.session_state.nav == 'Technician':
                     st.balloons(); st.success("Marked Present!")
                 else: st.error("Wrong PIN")
         else:
-            st.warning("Waiting for GPS... (Allow Location Access)")
+            st.warning("Waiting for GPS...")
+    else:
+        st.warning("Staff list is empty or database is resetting.")
+        with st.expander("➕ Emergency Add Staff"):
+            n = st.text_input("Name")
+            p = st.text_input("PIN")
+            if st.button("Add Staff Now"):
+                run_query('''CREATE TABLE IF NOT EXISTS employees (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255), designation VARCHAR(255), salary DOUBLE, pin VARCHAR(10))''', fetch=False)
+                run_query("INSERT INTO employees (name, designation, salary, pin) VALUES (%s, 'Tech', 15000, %s)", (n, p), fetch=False)
+                st.success("Added! Refreshing..."); st.rerun()
 
 # ==========================================
 # ADMIN ZONE
@@ -127,14 +125,24 @@ elif st.session_state.nav == 'Admin':
             st.session_state.auth = True
             st.success("Logged In")
             
-            # SHOW RAW DATA
+            # SHOW RAW DATA SAFELY (Fixed the Crash)
             st.subheader("Raw Database View")
             data = run_query("SELECT * FROM employees")
-            if data: st.dataframe(pd.DataFrame(data, columns=['ID', 'Name', 'Role', 'Salary', 'PIN']))
-            else: st.write("No employees found.")
             
-            # RESET BUTTON
-            if st.button("🔴 FACTORY RESET (Clear All Data)"):
-                run_query("DROP TABLE employees", fetch=False)
-                run_query("DROP TABLE attendance", fetch=False)
-                st.warning("Reset Complete. Reload App.")
+            if isinstance(data, str):
+                st.error(f"Database Error: {data}")
+                st.warning("Click 'Factory Reset' below to fix this table error.")
+            elif data: 
+                # Convert tuples to DataFrame safely
+                df = pd.DataFrame(list(data), columns=['ID', 'Name', 'Role', 'Salary', 'PIN'])
+                st.dataframe(df)
+            else: 
+                st.write("No employees found in database.")
+            
+            st.markdown("---")
+            if st.button("🔴 FACTORY RESET (Fix All Errors)"):
+                run_query("DROP TABLE IF EXISTS employees", fetch=False)
+                run_query("DROP TABLE IF EXISTS attendance", fetch=False)
+                run_query('''CREATE TABLE employees (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255), designation VARCHAR(255), salary DOUBLE, pin VARCHAR(10))''', fetch=False)
+                run_query('''CREATE TABLE attendance (id INT AUTO_INCREMENT PRIMARY KEY, emp_id INT, date DATE, time_in VARCHAR(20), status VARCHAR(50), latitude VARCHAR(50), longitude VARCHAR(50), address TEXT, UNIQUE KEY unique_att (emp_id, date))''', fetch=False)
+                st.success("Database Reset! You can now add staff.")
