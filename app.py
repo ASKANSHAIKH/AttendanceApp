@@ -22,23 +22,19 @@ def apply_styling():
         #MainMenu, footer, header, [data-testid="stToolbar"] {visibility: hidden;}
         .stDeployButton {display:none;}
         
-        /* Force light mode background and dark text */
         .stApp { background-color: #f0f2f6; margin-top: -50px; }
         h1, h2, h3, h4, h5, h6, p, label, div, span { color: #0e3b43 !important; }
         
-        /* Input fields */
         .stTextInput input, .stNumberInput input, .stDateInput input, .stPasswordInput input {
             background-color: white !important; color: black !important; border: 1px solid #ddd;
         }
         
-        /* Buttons */
         .stButton>button {
             width: 100%; height: 45px; border-radius: 8px; font-weight: 600;
             background: linear-gradient(90deg, #4ba3a8 0%, #2c7a7f 100%);
             color: white !important; border: none;
         }
         
-        /* Cards */
         .dashboard-card {
             background: white; padding: 20px; border-radius: 12px;
             box-shadow: 0 4px 15px rgba(0,0,0,0.1); border-top: 5px solid #4ba3a8; margin-bottom: 15px;
@@ -49,53 +45,48 @@ def apply_styling():
         </style>
     """, unsafe_allow_html=True)
 
-# --- 3. DATABASE ENGINE (SSL FIXED) ---
+# --- 3. DATABASE ENGINE (SSL & ERROR REPORTING) ---
 def get_db_connection():
     if "connections" in st.secrets and "tidb" in st.secrets["connections"]:
         creds = st.secrets["connections"]["tidb"]
-        
-        # TiDB Cloud requires a secure SSL context
-        ssl_ctx = ssl.create_default_context()
-        ssl_ctx.check_hostname = False
-        ssl_ctx.verify_mode = ssl.CERT_NONE
-
-        return pymysql.connect(
-            host=creds["DB_HOST"],
-            user=creds["DB_USER"],
-            password=creds["DB_PASSWORD"],
-            port=creds["DB_PORT"],
-            database=creds["DB_NAME"],
-            ssl=ssl_ctx  # CRITICAL: Uses correct SSL handshake
-        )
+        try:
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.check_hostname = False
+            ssl_ctx.verify_mode = ssl.CERT_NONE
+            
+            return pymysql.connect(
+                host=creds["DB_HOST"],
+                user=creds["DB_USER"],
+                password=creds["DB_PASSWORD"],
+                port=creds["DB_PORT"],
+                database=creds["DB_NAME"],
+                ssl=ssl_ctx
+            )
+        except Exception as e:
+            return None
     return None
 
 def run_query(query, params=None, fetch=True):
-    conn = None
+    conn = get_db_connection()
+    if not conn:
+        return "DB Connection Failed. Check Secrets."
     try:
-        conn = get_db_connection()
-        if conn:
-            with conn.cursor() as cursor:
-                cursor.execute(query, params or ())
-                if fetch:
-                    return cursor.fetchall()
-                else:
-                    conn.commit()
-                    return True
-        else:
-            return "Connection failed: No credentials found."
+        with conn.cursor() as cursor:
+            cursor.execute(query, params or ())
+            if fetch:
+                return cursor.fetchall()
+            else:
+                conn.commit()
+                return True
     except Exception as e:
-        # CRITICAL: This will show you exactly what is wrong instead of hiding it
-        return f"Error: {str(e)}"
+        return str(e)  # Return the actual error message
     finally:
-        if conn:
-            conn.close()
+        if conn: conn.close()
 
 # --- 4. AUTO-REPAIR ---
 def init_app():
-    # Only creates tables if they are missing. Does NOT delete data.
-    err = run_query('''CREATE TABLE IF NOT EXISTS employees (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255), designation VARCHAR(255), salary DOUBLE, pin VARCHAR(10))''', fetch=False)
-    if isinstance(err, str): st.error(err) # Show DB errors on startup
-    
+    # Attempt to fix tables if missing
+    run_query('''CREATE TABLE IF NOT EXISTS employees (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255), designation VARCHAR(255), salary DOUBLE, pin VARCHAR(10))''', fetch=False)
     run_query('''CREATE TABLE IF NOT EXISTS attendance (id INT AUTO_INCREMENT PRIMARY KEY, emp_id INT, date DATE, time_in VARCHAR(20), status VARCHAR(50), latitude VARCHAR(50), longitude VARCHAR(50), address TEXT, UNIQUE KEY unique_att (emp_id, date))''', fetch=False)
     run_query('''CREATE TABLE IF NOT EXISTS admin_config (id INT PRIMARY KEY, password VARCHAR(255))''', fetch=False)
     run_query("INSERT IGNORE INTO admin_config (id, password) VALUES (1, 'admin')", fetch=False)
@@ -115,7 +106,7 @@ def send_sms(mobile, otp, reason):
     try:
         if "SMS_API_KEY" not in st.secrets: return False
         url = "https://www.fast2sms.com/dev/bulkV2"
-        payload = {"route": "q", "message": f"OTP for {reason}: {otp}", "language": "english", "flash": 0, "numbers": mobile}
+        payload = {"route": "q", "message": f"National Air Condition OTP: {otp}", "language": "english", "flash": 0, "numbers": mobile}
         headers = {'authorization': st.secrets["SMS_API_KEY"], 'Content-Type': "application/x-www-form-urlencoded"}
         requests.request("POST", url, data=payload, headers=headers); return True
     except: return False
@@ -130,11 +121,7 @@ def calculate_salary_logic(emp_id, pay_month, pay_year, base_salary):
         
     att_data = run_query(f"SELECT date, status FROM attendance WHERE emp_id={emp_id} AND date BETWEEN '{s_date}' AND '{e_date}'")
     
-    if isinstance(att_data, str): # Database Error
-        st.error(att_data)
-        return 0.0, 0.0, []
-    
-    if not att_data:
+    if isinstance(att_data, str) or not att_data: 
         return 0.0, 0.0, []
         
     days = 0; report = []; att_dict = {str(r[0]): r[1] for r in att_data}
@@ -145,6 +132,7 @@ def calculate_salary_logic(emp_id, pay_month, pay_year, base_salary):
         stat = att_dict.get(str(curr), "Absent")
         cred = 1.0 if stat == 'Present' else (0.5 if stat == 'Half Day' else 0.0)
         
+        # Paid Sunday Logic
         if curr.strftime("%A") == 'Sunday':
             cred = 1.0 if has_worked else 0.0
         
@@ -165,7 +153,6 @@ st.sidebar.title("MENU")
 if 'nav' not in st.session_state: st.session_state.nav = 'Role Select'
 if 'auth' not in st.session_state: st.session_state.auth = False
 
-# Sidebar with Unique Keys
 def sidebar_nav_buttons():
     if st.session_state.auth:
         st.sidebar.markdown("---")
@@ -176,13 +163,10 @@ def sidebar_nav_buttons():
         if st.sidebar.button("Maintenance", key='btn_maint'): st.session_state.nav = 'Admin - Maint'
         st.sidebar.markdown("---")
         if st.sidebar.button("Logout", key='btn_logout'): 
-            st.session_state.auth = False
-            st.session_state.nav = 'Role Select'
-            st.rerun()
+            st.session_state.auth = False; st.session_state.nav = 'Role Select'; st.rerun()
     elif st.session_state.nav != 'Role Select':
         if st.sidebar.button("⬅️ Back to Home", key='btn_back'): 
-            st.session_state.nav = 'Role Select'
-            st.rerun()
+            st.session_state.nav = 'Role Select'; st.rerun()
 
 sidebar_nav_buttons()
 
@@ -212,8 +196,13 @@ elif st.session_state.nav == 'Technician - Punch':
             st.success("📍 GPS Active")
 
             rows = run_query("SELECT id, name, designation FROM employees")
-            if isinstance(rows, str): # Error Check
-                st.error(f"Database Error: {rows}")
+            
+            # --- DEBUG: CHECK FOR ERRORS ---
+            if isinstance(rows, str): 
+                st.error(f"❌ DATABASE ERROR: {rows}")
+                st.info("💡 Hint: You might need to delete old tables or check TiDB console.")
+            # -------------------------------
+            
             elif isinstance(rows, list) and rows:
                 df = pd.DataFrame(rows, columns=['id', 'name', 'desig'])
                 emp_id = st.selectbox("Select Your Name", df['id'], format_func=lambda x: df[df['id']==x]['name'].values[0])
@@ -231,17 +220,21 @@ elif st.session_state.nav == 'Technician - Punch':
                             real_pin = res[0][0] if res else "0000"
                             if pin == real_pin:
                                 addr = get_address(lat, lon); ist = get_ist_time()
-                                status = "Half Day" if ist.time() > time(10,30) else "Present"
+                                
+                                # --- UPDATED LOGIC: ALWAYS PRESENT ---
+                                status = "Present" 
+                                # -------------------------------------
+                                
                                 res = run_query("INSERT INTO attendance (emp_id, date, time_in, status, latitude, longitude, address) VALUES (%s, %s, %s, %s, %s, %s, %s)", (emp_id, ist.date(), ist.time().strftime("%H:%M"), status, str(lat), str(lon), addr), fetch=False)
-                                if res == True: st.balloons(); st.success("Marked!")
+                                if res == True: st.balloons(); st.success("Marked Present!")
                                 else: st.error("Already Marked Today!")
                             else: st.error("Wrong PIN")
                 with tab2:
                     if st.button("Request PIN Reset"):
                         st.session_state.reset_emp_id = emp_id
                         otp = random.randint(1000, 9999); st.session_state.otp = otp
-                        send_sms(ADMIN_MOBILE, otp, f"PIN Reset for {p['name']}")
-                        st.success(f"Request sent! OTP: {otp}")
+                        send_sms(ADMIN_MOBILE, otp, f"PIN Reset: {p['name']}")
+                        st.success(f"OTP Sent: {otp}")
                     if st.session_state.get('otp', False):
                         u_otp = st.text_input("OTP"); n_pin = st.text_input("New PIN", type='password', max_chars=4)
                         if st.button("Update PIN"):
@@ -249,7 +242,7 @@ elif st.session_state.nav == 'Technician - Punch':
                                 run_query(f"UPDATE employees SET pin='{n_pin}' WHERE id={st.session_state.reset_emp_id}", fetch=False)
                                 st.success("Updated!"); del st.session_state.otp; st.rerun()
                             else: st.error("Invalid OTP")
-            else: st.info("No Staff Found or Database is empty.")
+            else: st.warning("Staff list is empty. Please ask Admin to add staff.")
         else: st.warning("Waiting for GPS...")
 
 # --- 3. ADMIN LOGIN ---
@@ -272,12 +265,12 @@ elif st.session_state.auth:
         dt = get_ist_time().date()
         data = run_query(f"SELECT e.name, a.time_in, a.status, a.address FROM attendance a JOIN employees e ON a.emp_id=e.id WHERE a.date='{dt}'")
         
-        if isinstance(data, str): st.error(data) # Show DB Error
+        if isinstance(data, str): st.error(data)
         elif isinstance(data, list) and data:
             st.metric("Present Today", len(data))
             for row in data:
                 st.markdown(f"<div class='att-item'><h3>{row[0]}</h3><p>🕒 {row[1]} | {row[2]}</p><small>📍 {row[3]}</small></div>", unsafe_allow_html=True)
-        else: st.info("No attendance yet today. (Check Payroll for past records)")
+        else: st.info("No attendance yet today.")
 
     elif st.session_state.nav == 'Admin - Payroll':
         st.title("Payroll")
