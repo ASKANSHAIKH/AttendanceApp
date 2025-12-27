@@ -15,48 +15,30 @@ st.set_page_config(page_title="National Air Condition Portal", layout="wide")
 
 ADMIN_MOBILE = "9978815870"
 
-# --- 2. AGGRESSIVE DARK MODE FIX ---
+# --- 2. STYLING ---
 def apply_styling():
     st.markdown("""
         <style>
         #MainMenu, footer, header, [data-testid="stToolbar"] {visibility: hidden;}
         .stDeployButton {display:none;}
-        
-        /* FORCE WHITE BACKGROUND AND BLACK TEXT */
         .stApp { background-color: #ffffff !important; margin-top: -50px; }
-        
-        /* Force ALL text to be black, overriding Dark Mode */
-        p, h1, h2, h3, h4, h5, h6, span, div, label, li, a {
-            color: #000000 !important;
-        }
-        
-        /* Input Fields */
+        p, h1, h2, h3, h4, h5, h6, span, div, label, li, a { color: #000000 !important; }
         .stTextInput input, .stNumberInput input, .stDateInput input, .stPasswordInput input {
-            background-color: #f0f2f6 !important; 
-            color: #000000 !important; 
-            border: 1px solid #999;
-            font-weight: bold;
+            background-color: #f0f2f6 !important; color: #000000 !important; border: 1px solid #999; font-weight: bold;
         }
-        
-        /* Buttons */
         .stButton>button {
             width: 100%; height: 50px; border-radius: 8px; font-weight: bold;
             background: linear-gradient(90deg, #0e3b43 0%, #1b6ca8 100%);
             color: white !important; border: none;
         }
-        
-        /* Dashboard Cards */
         .dashboard-card {
             background: #f8f9fa !important; padding: 20px; border-radius: 12px;
             box-shadow: 0 4px 10px rgba(0,0,0,0.15); border: 1px solid #ddd; margin-bottom: 15px;
         }
-        
-        /* Warnings and Success Messages */
-        .stAlert { color: #000000 !important; }
         </style>
     """, unsafe_allow_html=True)
 
-# --- 3. DATABASE ENGINE (AUTOCOMMIT ENABLED) ---
+# --- 3. DATABASE ENGINE (DIRECT) ---
 def get_db_connection():
     if "connections" in st.secrets and "tidb" in st.secrets["connections"]:
         creds = st.secrets["connections"]["tidb"]
@@ -65,23 +47,25 @@ def get_db_connection():
             ssl_ctx.check_hostname = False
             ssl_ctx.verify_mode = ssl.CERT_NONE
             
-            conn = pymysql.connect(
+            # Autocommit=True ensures data is saved INSTANTLY
+            return pymysql.connect(
                 host=creds["DB_HOST"],
                 user=creds["DB_USER"],
                 password=creds["DB_PASSWORD"],
                 port=creds["DB_PORT"],
                 database=creds["DB_NAME"],
                 ssl=ssl_ctx,
-                autocommit=True  # <--- FORCE INSTANT SAVE
+                autocommit=True
             )
-            return conn
         except Exception as e:
+            st.error(f"❌ DB Connection Error: {e}")
             return None
+    st.error("❌ Secrets not found!")
     return None
 
 def run_query(query, params=None, fetch=True):
     conn = get_db_connection()
-    if not conn: return "DB Connection Failed"
+    if not conn: return None
     try:
         with conn.cursor() as cursor:
             cursor.execute(query, params or ())
@@ -90,18 +74,12 @@ def run_query(query, params=None, fetch=True):
             else:
                 return True
     except Exception as e:
-        return str(e)
+        st.error(f"❌ Query Error: {e}")
+        return None
     finally:
         if conn: conn.close()
 
-# --- 4. INIT ---
-def init_app():
-    run_query('''CREATE TABLE IF NOT EXISTS employees (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255), designation VARCHAR(255), salary DOUBLE, pin VARCHAR(10))''', fetch=False)
-    run_query('''CREATE TABLE IF NOT EXISTS attendance (id INT AUTO_INCREMENT PRIMARY KEY, emp_id INT, date DATE, time_in VARCHAR(20), status VARCHAR(50), latitude VARCHAR(50), longitude VARCHAR(50), address TEXT, UNIQUE KEY unique_att (emp_id, date))''', fetch=False)
-    run_query('''CREATE TABLE IF NOT EXISTS admin_config (id INT PRIMARY KEY, password VARCHAR(255))''', fetch=False)
-    run_query("INSERT IGNORE INTO admin_config (id, password) VALUES (1, 'admin')", fetch=False)
-
-# --- 5. UTILS ---
+# --- 4. UTILS ---
 def get_ist_time():
     return datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=5, minutes=30)
 
@@ -126,7 +104,7 @@ def calculate_salary_logic(emp_id, pay_month, pay_year, base_salary):
     else: s_date, e_date = date(pay_year, pay_month - 1, 5), date(pay_year, pay_month, 5)
         
     att_data = run_query(f"SELECT date, status FROM attendance WHERE emp_id={emp_id} AND date BETWEEN '{s_date}' AND '{e_date}'")
-    if isinstance(att_data, str) or not att_data: return 0.0, 0.0, []
+    if not att_data: return 0.0, 0.0, []
         
     days = 0; report = []; att_dict = {str(r[0]): r[1] for r in att_data}; has_worked = len(att_data) > 0
     curr = s_date
@@ -139,9 +117,6 @@ def calculate_salary_logic(emp_id, pay_month, pay_year, base_salary):
 
 # --- MAIN APP ---
 apply_styling()
-init_app()
-
-if os.path.exists("logo.png"): st.sidebar.image("logo.png", width=200)
 
 if 'nav' not in st.session_state: st.session_state.nav = 'Role Select'
 if 'auth' not in st.session_state: st.session_state.auth = False
@@ -164,10 +139,10 @@ if st.session_state.nav == 'Role Select':
     st.title("National Air Condition Portal")
     c1, c2 = st.columns(2)
     with c1:
-        st.markdown("<div class='dashboard-card'><h3>Technician</h3><p>Attendance Punch-In</p></div>", unsafe_allow_html=True)
+        st.markdown("<div class='dashboard-card'><h3>Technician</h3></div>", unsafe_allow_html=True)
         if st.button("TECHNICIAN ENTER"): st.session_state.nav = 'Technician - Punch'; st.rerun()
     with c2:
-        st.markdown("<div class='dashboard-card'><h3>Admin</h3><p>Management Panel</p></div>", unsafe_allow_html=True)
+        st.markdown("<div class='dashboard-card'><h3>Admin</h3></div>", unsafe_allow_html=True)
         if st.button("ADMIN LOGIN"): st.session_state.nav = 'Admin - Login'; st.rerun()
 
 # --- 2. TECHNICIAN ---
@@ -177,7 +152,6 @@ elif st.session_state.nav == 'Technician - Punch':
     with c2:
         st.markdown(f"<h3 style='text-align:center;'>Attendance</h3>", unsafe_allow_html=True)
         loc = get_geolocation()
-        
         if loc and 'coords' in loc:
             lat, lon = loc['coords']['latitude'], loc['coords']['longitude']
             st.success("✅ GPS Connected")
@@ -187,12 +161,10 @@ elif st.session_state.nav == 'Technician - Punch':
                 df = pd.DataFrame(rows, columns=['id', 'name'])
                 emp_id = st.selectbox("Select Name", df['id'], format_func=lambda x: df[df['id']==x]['name'].values[0])
                 pin = st.text_input("Enter PIN", type="password", max_chars=4)
-                
                 if st.button("PUNCH IN"):
                     res = run_query(f"SELECT pin FROM employees WHERE id={emp_id}")
                     if res and pin == res[0][0]:
-                        ist = get_ist_time()
-                        addr = get_address(lat, lon)
+                        ist = get_ist_time(); addr = get_address(lat, lon)
                         check = run_query("INSERT INTO attendance (emp_id, date, time_in, status, latitude, longitude, address) VALUES (%s, %s, %s, %s, %s, %s, %s)", (emp_id, ist.date(), ist.time().strftime("%H:%M"), "Present", str(lat), str(lon), addr), fetch=False)
                         if check == True: st.balloons(); st.success("Marked Present!")
                         else: st.error("Already Marked Today!")
@@ -207,6 +179,11 @@ elif st.session_state.nav == 'Admin - Login':
         pwd = st.text_input("Password", type="password")
         if st.button("Login"):
             res = run_query("SELECT password FROM admin_config WHERE id=1")
+            # Auto-create admin if missing
+            if not res: 
+                run_query("INSERT IGNORE INTO admin_config (id, password) VALUES (1, 'admin')", fetch=False)
+                res = [('admin',)]
+            
             if res and pwd == res[0][0]: st.session_state.auth = True; st.session_state.nav = 'Admin - Live'; st.rerun()
             else: st.error("Wrong Password")
 
@@ -222,25 +199,44 @@ elif st.session_state.auth:
 
     elif st.session_state.nav == 'Admin - Staff':
         st.title("Staff Management")
+        
+        # --- TEST BUTTON ---
+        if st.button("⚠️ Test Database Connection"):
+            test = run_query("SELECT 1")
+            if test: st.success("✅ Database is Connected!")
+            else: st.error("❌ Database Connection Failed.")
+            
         c1, c2 = st.columns(2)
         with c1:
-            with st.form("add"):
-                n = st.text_input("Name"); d = st.text_input("Role"); s = st.number_input("Salary"); p = st.text_input("PIN")
-                if st.form_submit_button("Add Staff"): 
+            st.subheader("Add Staff")
+            # REMOVED st.form for direct feedback
+            n = st.text_input("Name")
+            d = st.text_input("Role")
+            s = st.number_input("Salary", step=500.0)
+            p = st.text_input("PIN")
+            
+            if st.button("Save New Staff"):
+                if n and p:
+                    # Auto-create table if missing
+                    run_query('''CREATE TABLE IF NOT EXISTS employees (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255), designation VARCHAR(255), salary DOUBLE, pin VARCHAR(10))''', fetch=False)
+                    
                     res = run_query("INSERT INTO employees (name, designation, salary, pin) VALUES (%s, %s, %s, %s)", (n,d,s,p), fetch=False)
                     if res == True: 
-                        st.success("Added Successfully!"); 
-                        # Debug Confirmation
-                        count = run_query("SELECT count(*) FROM employees")[0][0]
-                        st.info(f"Total Staff in Database: {count}")
-                    else: st.error(f"Error: {res}")
+                        st.success(f"✅ Saved {n}!")
+                        st.rerun() # Refresh to update list
+                    else: st.error("Failed to save.")
+                else:
+                    st.warning("Name and PIN are required.")
+                    
         with c2:
+            st.subheader("Remove Staff")
             rows = run_query("SELECT id, name FROM employees")
             if isinstance(rows, list) and rows:
-                del_id = st.selectbox("Delete Staff", [r[0] for r in rows], format_func=lambda x: [r[1] for r in rows if r[0]==x][0])
-                if st.button("DELETE"): 
+                del_id = st.selectbox("Select to Delete", [r[0] for r in rows], format_func=lambda x: [r[1] for r in rows if r[0]==x][0])
+                if st.button("DELETE PERMANENTLY"): 
                     run_query(f"DELETE FROM attendance WHERE emp_id={del_id}", fetch=False)
                     run_query(f"DELETE FROM employees WHERE id={del_id}", fetch=False)
+                    st.success("Deleted!")
                     st.rerun()
 
     elif st.session_state.nav == 'Admin - Payroll':
