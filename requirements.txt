@@ -3,3 +3,4 @@ pandas
 pymysql
 geopy
 streamlit-js-eval
+requests
