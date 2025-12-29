@@ -4,6 +4,7 @@ from datetime import datetime, time, timedelta, date, timezone
 import pymysql
 import ssl
 import os
+from io import BytesIO 
 from streamlit_js_eval import get_geolocation, streamlit_js_eval
 from geopy.geocoders import Nominatim
 
@@ -34,7 +35,7 @@ st.markdown("""
         background-color: #f8f9fa !important; color: black !important; border: 1px solid #ccc;
     }
     
-    /* TABS STYLING (Make them big and visible) */
+    /* TABS STYLING */
     button[data-baseweb="tab"] {
         font-size: 18px !important;
         font-weight: bold !important;
@@ -96,7 +97,7 @@ def init_system():
 init_system()
 
 # =======================================================
-# 3. UTILS
+# 3. UTILS & EXCEL LOGIC
 # =======================================================
 def get_ist_time(): return datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=5, minutes=30)
 
@@ -107,23 +108,75 @@ def get_address(lat, lon):
         return loc.address.split(",")[0] if loc else "Unknown"
     except: return "Loc Unavailable"
 
-def calculate_payroll(emp_id, month, year, salary):
-    if month == 1: s_date, e_date = date(year-1, 12, 5), date(year, month, 5)
-    else: s_date, e_date = date(year, month-1, 5), date(year, month, 5)
+def to_excel(df):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Attendance_Report')
+    processed_data = output.getvalue()
+    return processed_data
+
+def calculate_payroll(emp_id, start_month, year, salary):
+    # LOGIC: Start 5th of Selected Month -> End 4th of Next Month
+    s_date = date(year, start_month, 5)
     
-    data = run_query(f"SELECT date, status FROM attendance WHERE emp_id={emp_id} AND date BETWEEN '{s_date}' AND '{e_date}'")
-    if not data: return 0, 0, []
+    # Handle Year Rollover (e.g., if start is Dec, end is Jan of next year)
+    if start_month == 12:
+        e_date = date(year + 1, 1, 4)
+    else:
+        e_date = date(year, start_month + 1, 4)
     
-    att_map = {r[0]: r[1] for r in data}; total_days = 0; report = []; has_worked = len(data) > 0
+    # Fetch Attendance
+    data = run_query(f"SELECT date, status, time_in, address FROM attendance WHERE emp_id={emp_id} AND date BETWEEN '{s_date}' AND '{e_date}'")
+    
+    # Process Data
+    att_map = {}
+    if data:
+        for r in data:
+            att_map[r[0]] = {'status': r[1], 'time': r[2], 'loc': r[3]}
+            
+    total_days = 0
+    detailed_report = []
+    has_worked_any = len(data) > 0 if data else False
+    
     curr = s_date
     while curr <= e_date:
-        status = att_map.get(curr, "Absent")
-        cred = 1.0 if status == "Present" else (0.5 if status == "Half Day" else 0.0)
-        if curr.strftime("%A") == "Sunday" and has_worked: cred = 1.0
-        total_days += cred
-        report.append([curr.strftime("%Y-%m-%d"), curr.strftime("%A"), status, cred])
+        # Defaults
+        status = "Absent"
+        time_in = "-"
+        loc = "-"
+        
+        # Check if record exists
+        if curr in att_map:
+            record = att_map[curr]
+            status = record['status']
+            time_in = record['time']
+            loc = record['loc']
+        
+        # Credit Logic
+        credit = 0.0
+        if status == "Present": credit = 1.0
+        elif status == "Half Day": credit = 0.5
+        
+        # Paid Sunday Logic
+        if curr.strftime("%A") == "Sunday" and has_worked_any: 
+            status = "Weekly Off"
+            credit = 1.0
+            
+        total_days += credit
+        
+        detailed_report.append({
+            "Date": curr.strftime("%d-%m-%Y"),
+            "Day": curr.strftime("%A"),
+            "Status": status,
+            "Punch In": time_in,
+            "Location": loc,
+            "Credit": credit
+        })
+        
         curr += timedelta(days=1)
-    return (salary / 30) * total_days, total_days, report
+        
+    final_pay = (salary / 30) * total_days
+    return final_pay, total_days, detailed_report, s_date, e_date
 
 # =======================================================
 # 4. MAIN NAVIGATION
@@ -184,11 +237,10 @@ elif st.session_state.nav == 'Login':
         if pwd == real_pass: st.session_state.auth = True; st.session_state.nav = 'Dashboard'; st.rerun()
         else: st.error("Wrong Password")
 
-# --- DASHBOARD (WITH TABS FOR MOBILE) ---
+# --- DASHBOARD ---
 elif st.session_state.nav == 'Dashboard' and st.session_state.auth:
     if st.button("🚪 Logout", key='logout'): st.session_state.auth = False; st.session_state.nav = 'Home'; st.rerun()
     
-    # TABS NAVIGATION - BEST FOR MOBILE
     tab1, tab2, tab3 = st.tabs(["📊 Live Status", "👥 Staff Mgmt", "💰 Payroll"])
     
     with tab1:
@@ -200,7 +252,6 @@ elif st.session_state.nav == 'Dashboard' and st.session_state.auth:
 
     with tab2:
         st.subheader("Manage Staff")
-        
         st.markdown("**Add New Staff**")
         n = st.text_input("Name")
         s = st.number_input("Salary", step=500)
@@ -220,10 +271,39 @@ elif st.session_state.nav == 'Dashboard' and st.session_state.auth:
                 st.success("Deleted!"); st.rerun()
 
     with tab3:
-        st.subheader("Payroll")
+        st.subheader("Payroll & Excel Export")
         staff = run_query("SELECT id, name, salary FROM employees")
         if staff:
-            u = st.selectbox("Select User", [r[0] for r in staff], format_func=lambda x: [r[1] for r in staff if r[0]==x][0])
-            if st.button("Calculate Pay"):
-                pay, days, rep = calculate_payroll(u, datetime.now().month-1, datetime.now().year, [r[2] for r in staff if r[0]==u][0])
-                st.metric("Payable Amount", f"₹{pay:,.0f}", f"{days} Days")
+            c1, c2, c3 = st.columns(3)
+            with c1: u = st.selectbox("Select Technician", [r[0] for r in staff], format_func=lambda x: [r[1] for r in staff if r[0]==x][0])
+            with c2: m = st.selectbox("Cycle Start Month", range(1, 13), index=datetime.now().month-1, help="Select Jan for Jan 5 - Feb 4")
+            with c3: y = st.number_input("Year", value=datetime.now().year)
+            
+            if st.button("Calculate & Generate Report"):
+                base_sal = [r[2] for r in staff if r[0]==u][0]
+                emp_name = [r[1] for r in staff if r[0]==u][0]
+                
+                pay, days, report_data, start_d, end_d = calculate_payroll(u, m, y, base_sal)
+                
+                st.markdown(f"""
+                <div style='background-color:#e6fffa; padding:15px; border-radius:10px; border-left:5px solid #0e3b43'>
+                    <h3 style='margin:0'>Total Pay: ₹ {pay:,.0f}</h3>
+                    <p style='margin:0'><b>{days}</b> Days Payable (Cycle: {start_d.strftime('%d %b')} to {end_d.strftime('%d %b')})</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Create DataFrame for Excel
+                df_report = pd.DataFrame(report_data)
+                excel_file = to_excel(df_report)
+                
+                # Excel Download Button
+                file_name = f"{emp_name}_Attendance_{start_d.strftime('%b%Y')}.xlsx"
+                st.download_button(
+                    label=f"📥 Download Excel for {emp_name}",
+                    data=excel_file,
+                    file_name=file_name,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+                
+                st.markdown("### Detailed View")
+                st.dataframe(df_report, use_container_width=True)
