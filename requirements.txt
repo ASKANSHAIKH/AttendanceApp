@@ -4,3 +4,4 @@ pymysql
 geopy
 streamlit-js-eval
 requests
+openpyxl
