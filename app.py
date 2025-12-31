@@ -18,65 +18,24 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# FORCE DARK THEME & STATIC COLORS (No Hover Glitches)
+# FORCE DARK THEME & STATIC COLORS
 st.markdown("""
     <style>
-    /* 1. Main Background - Deep Dark Grey */
-    .stApp { 
-        background-color: #121212 !important; 
-    }
-    
-    /* 2. Text Visibility - Always White */
-    h1, h2, h3, h4, h5, h6, p, label, span, div, li { 
-        color: #ffffff !important; 
-        font-family: sans-serif;
-    }
-    
-    /* 3. Buttons - Static Teal Color (No Hover Animation) */
+    .stApp { background-color: #121212 !important; }
+    h1, h2, h3, h4, h5, h6, p, label, span, div, li { color: #ffffff !important; font-family: sans-serif; }
     .stButton>button {
-        width: 100%; 
-        border-radius: 8px; 
-        height: 50px; 
-        font-weight: bold;
-        background-color: #00ADB5 !important; /* Cyan/Teal */
-        color: white !important; 
-        border: none !important;
-        transition: none !important; /* REMOVED HOVER EFFECT */
+        width: 100%; border-radius: 8px; height: 50px; font-weight: bold;
+        background-color: #00ADB5 !important; color: white !important; border: none !important; transition: none !important;
     }
-    
-    /* Force button to stay same color on hover */
     .stButton>button:hover, .stButton>button:active, .stButton>button:focus {
-        background-color: #00ADB5 !important;
-        color: white !important;
-        box-shadow: none !important;
+        background-color: #00ADB5 !important; color: white !important; box-shadow: none !important;
     }
-    
-    /* 4. Input Fields - White for Contrast */
     .stTextInput input, .stNumberInput input, .stPasswordInput input, .stSelectbox div {
-        background-color: #ffffff !important; 
-        color: #000000 !important; 
-        border: 1px solid #333;
+        background-color: #ffffff !important; color: #000000 !important; border: 1px solid #333;
     }
-    
-    /* 5. Tabs Styling */
-    button[data-baseweb="tab"] {
-        color: #ffffff !important;
-        background-color: #1e1e1e !important;
-    }
-    button[data-baseweb="tab"][aria-selected="true"] {
-        background-color: #00ADB5 !important;
-        color: white !important;
-    }
-    
-    /* 6. Dashboard Cards */
-    .metric-card {
-        background-color: #1E1E1E;
-        padding: 20px;
-        border-radius: 10px;
-        border: 1px solid #333;
-        margin-bottom: 15px;
-    }
-    
+    button[data-baseweb="tab"] { color: #ffffff !important; background-color: #1e1e1e !important; }
+    button[data-baseweb="tab"][aria-selected="true"] { background-color: #00ADB5 !important; color: white !important; }
+    .metric-card { background-color: #1E1E1E; padding: 20px; border-radius: 10px; border: 1px solid #333; margin-bottom: 15px; }
     #MainMenu, footer, header {visibility: hidden;}
     </style>
 """, unsafe_allow_html=True)
@@ -125,7 +84,7 @@ def init_system():
 init_system()
 
 # =======================================================
-# 3. UTILS & EXCEL
+# 3. UTILS & EXCEL LOGIC
 # =======================================================
 def get_ist_time(): return datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=5, minutes=30)
 
@@ -136,17 +95,16 @@ def get_address(lat, lon):
         return loc.address.split(",")[0] if loc else "Unknown"
     except: return "Loc Unavailable"
 
-def to_excel(df):
+# --- NEW MASTER EXCEL FUNCTION ---
+def generate_master_excel(summary_df, detailed_df):
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Report')
+        summary_df.to_excel(writer, index=False, sheet_name='Salary Summary')
+        detailed_df.to_excel(writer, index=False, sheet_name='Detailed Daily Logs')
     return output.getvalue()
 
-def calculate_payroll(emp_id, start_month, year, salary):
-    s_date = date(year, start_month, 5)
-    if start_month == 12: e_date = date(year + 1, 1, 4)
-    else: e_date = date(year, start_month + 1, 4)
-    
+def calculate_payroll_logic(emp_id, s_date, e_date, salary):
+    # Fetch Data
     data = run_query(f"SELECT date, status, time_in, address FROM attendance WHERE emp_id={emp_id} AND date BETWEEN '{s_date}' AND '{e_date}'")
     
     att_map = {}
@@ -155,6 +113,7 @@ def calculate_payroll(emp_id, start_month, year, salary):
             
     total_days = 0; report = []; has_worked = len(data) > 0 if data else False
     curr = s_date
+    
     while curr <= e_date:
         stat = "Absent"; t_in = "-"; loc = "-"
         if curr in att_map:
@@ -165,10 +124,18 @@ def calculate_payroll(emp_id, start_month, year, salary):
         if curr.strftime("%A") == "Sunday" and has_worked: stat = "Weekly Off"; cred = 1.0
             
         total_days += cred
-        report.append({"Date": curr.strftime("%d-%m-%Y"), "Day": curr.strftime("%A"), "Status": stat, "Punch In": t_in, "Location": loc, "Credit": cred})
+        report.append({
+            "Date": curr.strftime("%Y-%m-%d"), 
+            "Day": curr.strftime("%A"), 
+            "Status": stat, 
+            "Punch In": t_in, 
+            "Location": loc, 
+            "Credit": cred
+        })
         curr += timedelta(days=1)
         
-    return (salary / 30) * total_days, total_days, report, s_date, e_date
+    final_pay = (salary / 30) * total_days
+    return final_pay, total_days, report
 
 # =======================================================
 # 4. MAIN NAVIGATION
@@ -265,21 +232,65 @@ elif st.session_state.nav == 'Dashboard' and st.session_state.auth:
                 st.success("Deleted!"); st.rerun()
 
     with tab3:
-        st.subheader("Payroll & Excel Export")
-        staff = run_query("SELECT id, name, salary FROM employees")
-        if staff:
-            c1, c2, c3 = st.columns(3)
-            with c1: u = st.selectbox("Staff Member", [r[0] for r in staff], format_func=lambda x: [r[1] for r in staff if r[0]==x][0])
-            with c2: m = st.selectbox("Start Month", range(1, 13), index=datetime.now().month-1)
-            with c3: y = st.number_input("Year", value=datetime.now().year)
+        st.subheader("Master Payroll Report")
+        
+        c1, c2 = st.columns(2)
+        with c1: m = st.selectbox("Select Month", range(1, 13), index=datetime.now().month-1, help="Cycle: 5th to 4th")
+        with c2: y = st.number_input("Year", value=datetime.now().year)
+        
+        # Calculate Date Range
+        sd = date(y, m, 5)
+        ed = date(y + 1, 1, 4) if m == 12 else date(y, m + 1, 4)
+        
+        st.info(f"📅 Report Cycle: {sd.strftime('%d %b %Y')} to {ed.strftime('%d %b %Y')}")
+        
+        if st.button("📥 GENERATE MASTER EXCEL (ALL STAFF)"):
+            staff_list = run_query("SELECT id, name, salary FROM employees")
             
-            if st.button("Generate Report"):
-                bs = [r[2] for r in staff if r[0]==u][0]; en = [r[1] for r in staff if r[0]==u][0]
-                pay, days, rep, sd, ed = calculate_payroll(u, m, y, bs)
+            if staff_list:
+                all_summaries = []
+                all_details = []
                 
-                st.markdown(f"<div class='metric-card'><h3>Pay: ₹{pay:,.0f}</h3><p>{days} Days ({sd.strftime('%d %b')} - {ed.strftime('%d %b')})</p></div>", unsafe_allow_html=True)
+                # Loop through ALL staff
+                for emp in staff_list:
+                    eid, ename, esal = emp[0], emp[1], emp[2]
+                    
+                    pay, days, detailed_log = calculate_payroll_logic(eid, sd, ed, esal)
+                    
+                    # Add to Summary
+                    all_summaries.append({
+                        "Name": ename,
+                        "Base Salary": esal,
+                        "Days Worked": days,
+                        "Net Payable": round(pay)
+                    })
+                    
+                    # Add to Details (Add Name column to distinguish rows)
+                    for log in detailed_log:
+                        log["Technician Name"] = ename
+                        all_details.append(log)
                 
-                df_rep = pd.DataFrame(rep)
-                if not df_rep.empty:
-                    st.download_button(f"📥 Download Excel", to_excel(df_rep), f"{en}_{sd.strftime('%b')}.xlsx")
-                    st.dataframe(df_rep, use_container_width=True)
+                # Create DataFrames
+                df_summary = pd.DataFrame(all_summaries)
+                df_details = pd.DataFrame(all_details)
+                
+                # Reorder Detail Columns for readability
+                if not df_details.empty:
+                    cols = ["Date", "Technician Name", "Day", "Status", "Punch In", "Location", "Credit"]
+                    df_details = df_details[cols]
+
+                # Generate Excel
+                excel_data = generate_master_excel(df_summary, df_details)
+                
+                st.download_button(
+                    label="⬇️ Click to Download Master File",
+                    data=excel_data,
+                    file_name=f"Master_Attendance_{sd.strftime('%b_%Y')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+                st.success("✅ Report Generated Successfully!")
+                
+                st.write("Preview (Summary):")
+                st.dataframe(df_summary, use_container_width=True)
+            else:
+                st.warning("No staff found in database.")
