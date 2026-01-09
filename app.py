@@ -240,7 +240,7 @@ elif st.session_state.nav == 'Dashboard' and st.session_state.auth:
         
         # Calculate Date Range
         sd = date(y, m, 5)
-        ed = date(y + 1, 1, 4) if m == 12 else date(y, m + 1, 4)
+        ed = date(y + 1, 1, 5) if m == 12 else date(y, m + 1, 5)
         
         st.info(f"📅 Report Cycle: {sd.strftime('%d %b %Y')} to {ed.strftime('%d %b %Y')}")
         
