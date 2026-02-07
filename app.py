@@ -41,9 +41,11 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =======================================================
-# 2. DATABASE ENGINE
+# 2. DATABASE ENGINE (OPTIMIZED)
 # =======================================================
-def get_db_connection():
+# CACHED CONNECTION: Connects once and stays alive
+@st.cache_resource
+def init_connection():
     if "connections" not in st.secrets or "tidb" not in st.secrets["connections"]:
         st.error("❌ Database Secrets Missing!")
         return None
@@ -53,24 +55,22 @@ def get_db_connection():
     ssl_ctx.check_hostname = False
     ssl_ctx.verify_mode = ssl.CERT_NONE
 
-    try:
-        return pymysql.connect(
-            host=creds["DB_HOST"], user=creds["DB_USER"], password=creds["DB_PASSWORD"],
-            port=creds["DB_PORT"], database=creds["DB_NAME"], ssl=ssl_ctx, autocommit=True
-        )
-    except Exception as e: return None
+    return pymysql.connect(
+        host=creds["DB_HOST"], user=creds["DB_USER"], password=creds["DB_PASSWORD"],
+        port=creds["DB_PORT"], database=creds["DB_NAME"], ssl=ssl_ctx, autocommit=True
+    )
 
 def run_query(query, params=None, fetch=True):
-    conn = get_db_connection()
+    conn = init_connection()
     if not conn: return None
     try:
+        conn.ping(reconnect=True) # Reconnect if connection dropped
         with conn.cursor() as cursor:
             cursor.execute(query, params or ())
             if fetch: return cursor.fetchall()
             return True
-    except Exception as e: return None
-    finally:
-        if conn: conn.close()
+    except Exception as e:
+        return None
 
 # --- FORCE SYSTEM INIT ---
 def init_system():
@@ -95,7 +95,6 @@ def get_address(lat, lon):
         return loc.address.split(",")[0] if loc else "Unknown"
     except: return "Loc Unavailable"
 
-# --- NEW MASTER EXCEL FUNCTION ---
 def generate_master_excel(summary_df, detailed_df):
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -103,39 +102,68 @@ def generate_master_excel(summary_df, detailed_df):
         detailed_df.to_excel(writer, index=False, sheet_name='Detailed Daily Logs')
     return output.getvalue()
 
-def calculate_payroll_logic(emp_id, s_date, e_date, salary):
-    # Fetch Data
-    data = run_query(f"SELECT date, status, time_in, address FROM attendance WHERE emp_id={emp_id} AND date BETWEEN '{s_date}' AND '{e_date}'")
+# --- OPTIMIZED PAYROLL LOGIC (BATCH PROCESSING) ---
+def get_payroll_data(s_date, e_date):
+    # 1. Fetch ALL Staff
+    staff = run_query("SELECT id, name, salary FROM employees")
+    if not staff: return None, None
     
-    att_map = {}
-    if data:
-        for r in data: att_map[r[0]] = {'status': r[1], 'time': r[2], 'loc': r[3]}
-            
-    total_days = 0; report = []; has_worked = len(data) > 0 if data else False
-    curr = s_date
+    # 2. Fetch ALL Attendance in ONE query (Fast)
+    att_data = run_query(f"SELECT emp_id, date, status, time_in, address FROM attendance WHERE date BETWEEN '{s_date}' AND '{e_date}'")
     
-    while curr <= e_date:
-        stat = "Absent"; t_in = "-"; loc = "-"
-        if curr in att_map:
-            rec = att_map[curr]
-            stat = rec['status']; t_in = rec['time']; loc = rec['loc']
+    # 3. Map Attendance for O(1) Access
+    att_map = {} # Key: (emp_id, date_obj) -> Value: {status, time, loc}
+    if att_data:
+        for r in att_data:
+            att_map[(r[0], r[1])] = {'status': r[2], 'time': r[3], 'loc': r[4]}
+    
+    summary_list = []
+    detail_list = []
+    
+    # 4. Process Logic in Python Memory
+    for emp in staff:
+        eid, name, salary = emp
         
-        cred = 1.0 if stat == "Present" else (0.5 if stat == "Half Day" else 0.0)
-        if curr.strftime("%A") == "Sunday" and has_worked: stat = "Weekly Off"; cred = 1.0
+        # Check if this employee has ANY attendance in the map
+        has_worked_ever = any(k[0] == eid for k in att_map.keys())
+        
+        curr = s_date
+        total_days = 0
+        
+        while curr <= e_date:
+            key = (eid, curr)
+            stat = "Absent"; t_in = "-"; loc = "-"
             
-        total_days += cred
-        report.append({
-            "Date": curr.strftime("%Y-%m-%d"), 
-            "Day": curr.strftime("%A"), 
-            "Status": stat, 
-            "Punch In": t_in, 
-            "Location": loc, 
-            "Credit": cred
+            if key in att_map:
+                rec = att_map[key]
+                stat = rec['status']; t_in = rec['time']; loc = rec['loc']
+            
+            cred = 1.0 if stat == "Present" else (0.5 if stat == "Half Day" else 0.0)
+            if curr.strftime("%A") == "Sunday" and has_worked_ever: 
+                stat = "Weekly Off"; cred = 1.0
+                
+            total_days += cred
+            
+            detail_list.append({
+                "Date": curr.strftime("%Y-%m-%d"),
+                "Technician Name": name,
+                "Day": curr.strftime("%A"),
+                "Status": stat,
+                "Punch In": t_in,
+                "Location": loc,
+                "Credit": cred
+            })
+            curr += timedelta(days=1)
+            
+        final_pay = (salary / 30) * total_days
+        summary_list.append({
+            "Name": name,
+            "Base Salary": salary,
+            "Days Worked": total_days,
+            "Net Payable": round(final_pay)
         })
-        curr += timedelta(days=1)
         
-    final_pay = (salary / 30) * total_days
-    return final_pay, total_days, report
+    return pd.DataFrame(summary_list), pd.DataFrame(detail_list)
 
 # =======================================================
 # 4. MAIN NAVIGATION
@@ -157,10 +185,10 @@ if st.session_state.nav == 'Home':
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("<div class='metric-card'><h3>👷 Technician Zone</h3><p>Punch In for Attendance</p></div>", unsafe_allow_html=True)
-        if st.button("ENTER AS TECHNICIAN"): st.session_state.nav = 'Technician'
+        if st.button("ENTER AS TECHNICIAN"): st.session_state.nav = 'Technician'; st.rerun()
     with c2:
         st.markdown("<div class='metric-card'><h3>🛡️ Admin Zone</h3><p>Manage Staff & Payroll</p></div>", unsafe_allow_html=True)
-        if st.button("ENTER AS ADMIN"): st.session_state.nav = 'Login'
+        if st.button("ENTER AS ADMIN"): st.session_state.nav = 'Login'; st.rerun()
 
 # --- TECHNICIAN ---
 elif st.session_state.nav == 'Technician':
@@ -235,7 +263,7 @@ elif st.session_state.nav == 'Dashboard' and st.session_state.auth:
         st.subheader("Master Payroll Report")
         
         c1, c2 = st.columns(2)
-        with c1: m = st.selectbox("Select Month", range(1, 13), index=datetime.now().month-1, help="Cycle: 5th to 4th")
+        with c1: m = st.selectbox("Select Month", range(1, 13), index=datetime.now().month-1)
         with c2: y = st.number_input("Year", value=datetime.now().year)
         
         # Calculate Date Range
@@ -245,52 +273,24 @@ elif st.session_state.nav == 'Dashboard' and st.session_state.auth:
         st.info(f"📅 Report Cycle: {sd.strftime('%d %b %Y')} to {ed.strftime('%d %b %Y')}")
         
         if st.button("📥 GENERATE MASTER EXCEL (ALL STAFF)"):
-            staff_list = run_query("SELECT id, name, salary FROM employees")
-            
-            if staff_list:
-                all_summaries = []
-                all_details = []
+            with st.spinner("Processing Payroll..."):
+                # Use optimized batch function
+                df_summary, df_details = get_payroll_data(sd, ed)
                 
-                # Loop through ALL staff
-                for emp in staff_list:
-                    eid, ename, esal = emp[0], emp[1], emp[2]
-                    
-                    pay, days, detailed_log = calculate_payroll_logic(eid, sd, ed, esal)
-                    
-                    # Add to Summary
-                    all_summaries.append({
-                        "Name": ename,
-                        "Base Salary": esal,
-                        "Days Worked": days,
-                        "Net Payable": round(pay)
-                    })
-                    
-                    # Add to Details (Add Name column to distinguish rows)
-                    for log in detailed_log:
-                        log["Technician Name"] = ename
-                        all_details.append(log)
-                
-                # Create DataFrames
-                df_summary = pd.DataFrame(all_summaries)
-                df_details = pd.DataFrame(all_details)
-                
-                # Reorder Detail Columns for readability
-                if not df_details.empty:
+                if df_summary is not None and not df_summary.empty:
+                    # Reorder Columns for detail view
                     cols = ["Date", "Technician Name", "Day", "Status", "Punch In", "Location", "Credit"]
                     df_details = df_details[cols]
 
-                # Generate Excel
-                excel_data = generate_master_excel(df_summary, df_details)
-                
-                st.download_button(
-                    label="⬇️ Click to Download Master File",
-                    data=excel_data,
-                    file_name=f"Master_Attendance_{sd.strftime('%b_%Y')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-                st.success("✅ Report Generated Successfully!")
-                
-                st.write("Preview (Summary):")
-                st.dataframe(df_summary, use_container_width=True)
-            else:
-                st.warning("No staff found in database.")
+                    excel_data = generate_master_excel(df_summary, df_details)
+                    
+                    st.download_button(
+                        label="⬇️ Click to Download Master File",
+                        data=excel_data,
+                        file_name=f"Master_Attendance_{sd.strftime('%b_%Y')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                    st.success("✅ Report Generated Successfully!")
+                    st.dataframe(df_summary, use_container_width=True)
+                else:
+                    st.warning("No staff or data found.")
